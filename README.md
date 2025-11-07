@@ -78,7 +78,7 @@ This creates `ClipboardManager.app` ready to install.
 
 Database location: `~/.clipboard_history.db`
 
-**See [SECURITY.md](SECURITY.md) for detailed security analysis and threat model.**
+For detailed security architecture, see [CLAUDE.md](CLAUDE.md).
 
 ## Performance
 
@@ -205,3 +205,7 @@ Built with:
 - [Swift](https://swift.org/) - Programming language
 - [SQLite.swift](https://github.com/stephencelis/SQLite.swift) - Database wrapper
 - Apple's CryptoKit - Encryption framework
+
+---
+
+*Last Updated: 2025-11-06*
