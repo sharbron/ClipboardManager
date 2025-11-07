@@ -9,7 +9,13 @@ struct ClipboardManagerApp: App {
 
     init() {
         let database = ClipboardDatabase()
-        _appState = StateObject(wrappedValue: AppState(database: database))
+        let snippetDatabase = SnippetDatabase()
+        let snippetManager = SnippetManager(database: snippetDatabase)
+        _appState = StateObject(wrappedValue: AppState(
+            database: database,
+            snippetDatabase: snippetDatabase,
+            snippetManager: snippetManager
+        ))
     }
 
     var body: some Scene {
@@ -67,8 +73,17 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
             NSLog("✅ Database initialized")
 
-            // Initialize clipboard monitor
-            let monitor = ClipboardMonitor(database: appState.database, appState: appState)
+            // Wait for snippet database initialization
+            var snippetInitialized = appState.snippetDatabase.isInitialized
+            while !snippetInitialized {
+                try? await Task.sleep(nanoseconds: 100_000_000)
+                snippetInitialized = appState.snippetDatabase.isInitialized
+            }
+
+            NSLog("✅ Snippet database initialized")
+
+            // Initialize clipboard monitor with snippet manager
+            let monitor = ClipboardMonitor(database: appState.database, appState: appState, snippetManager: appState.snippetManager)
             clipboardMonitor = monitor
             appState.clipboardMonitor = monitor
             monitor.startMonitoring()

@@ -5,14 +5,21 @@ import UserNotifications
 @MainActor
 class AppState: ObservableObject {
     @Published var clips: [ClipboardEntry] = []
+    @Published var snippets: [Snippet] = []
 
     let database: ClipboardDatabase
+    let snippetDatabase: SnippetDatabase
+    let snippetManager: SnippetManager
     weak var clipboardMonitor: ClipboardMonitor?
     private var loadTask: Task<Void, Never>?
+    private var snippetLoadTask: Task<Void, Never>?
 
-    init(database: ClipboardDatabase) {
+    init(database: ClipboardDatabase, snippetDatabase: SnippetDatabase, snippetManager: SnippetManager) {
         self.database = database
+        self.snippetDatabase = snippetDatabase
+        self.snippetManager = snippetManager
         loadClips()
+        loadSnippets()
     }
 
     func loadClips() {
@@ -86,6 +93,82 @@ class AppState: ObservableObject {
             notification.body = "Clip copied to clipboard"
             let request = UNNotificationRequest(identifier: UUID().uuidString, content: notification, trigger: nil)
             try? await UNUserNotificationCenter.current().add(request)
+        }
+    }
+
+    // MARK: - Snippet Management
+
+    func loadSnippets() {
+        snippetLoadTask?.cancel()
+
+        snippetLoadTask = Task {
+            snippets = await snippetDatabase.getAllSnippets()
+            await snippetManager.loadSnippets()
+        }
+    }
+
+    func saveSnippet(trigger: String, content: String, description: String) {
+        Task {
+            let success = await snippetDatabase.saveSnippet(
+                trigger: trigger,
+                content: content,
+                description: description
+            )
+            if success {
+                loadSnippets()
+            }
+        }
+    }
+
+    func deleteSnippet(id: Int64) {
+        Task {
+            _ = await snippetDatabase.deleteSnippet(id: id)
+            loadSnippets()
+        }
+    }
+
+    func expandSnippet(_ snippet: Snippet) async {
+        // Pause monitoring
+        clipboardMonitor?.pauseMonitoring()
+
+        // Copy expanded content to clipboard
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(snippet.content, forType: .string)
+
+        // Resume monitoring
+        try? await Task.sleep(nanoseconds: 100_000_000)
+        clipboardMonitor?.resumeMonitoring()
+
+        // Increment usage count
+        await snippetDatabase.incrementUsageCount(trigger: snippet.trigger)
+
+        // Show notification
+        let enableNotifications = UserDefaults.standard.bool(forKey: "enableNotifications")
+        if enableNotifications || !UserDefaults.standard.dictionaryRepresentation().keys.contains("enableNotifications") {
+            let notification = UNMutableNotificationContent()
+            notification.title = "Snippet Expanded"
+            notification.body = "'\(snippet.trigger)' copied to clipboard"
+            let request = UNNotificationRequest(identifier: UUID().uuidString, content: notification, trigger: nil)
+            try? await UNUserNotificationCenter.current().add(request)
+        }
+    }
+
+    func createDefaultSnippets() {
+        Task {
+            await snippetDatabase.createDefaultSnippets()
+            loadSnippets()
+        }
+    }
+
+    func exportSnippets() async -> [ExportableSnippet] {
+        return await snippetDatabase.exportSnippets()
+    }
+
+    func importSnippets(_ snippets: [ExportableSnippet], replaceExisting: Bool = false) {
+        Task {
+            _ = await snippetDatabase.importSnippets(snippets, replaceExisting: replaceExisting)
+            loadSnippets()
         }
     }
 }

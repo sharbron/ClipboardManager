@@ -18,13 +18,19 @@ actor ClipboardMonitor {
     private let pasteboard = NSPasteboard.general
     private let database: ClipboardDatabase
     private weak var appState: AppState?
+    private var snippetManager: SnippetManager?
     private var lastContent: String = ""
     private var isRestoringClip = false
 
-    init(database: ClipboardDatabase, appState: AppState) {
+    init(database: ClipboardDatabase, appState: AppState, snippetManager: SnippetManager? = nil) {
         self.database = database
         self.appState = appState
+        self.snippetManager = snippetManager
         self.lastChangeCount = pasteboard.changeCount
+    }
+
+    func setSnippetManager(_ manager: SnippetManager) {
+        self.snippetManager = manager
     }
 
     nonisolated func pauseMonitoring() {
@@ -145,9 +151,27 @@ actor ClipboardMonitor {
         }
 
         // Get plain text content as fallback
-        guard let content = pasteboard.string(forType: .string),
+        guard var content = pasteboard.string(forType: .string),
               !content.isEmpty,
               content != lastContent else { return }
+
+        // Check for snippet expansion
+        if let snippetManager = snippetManager,
+           let expandedContent = await snippetManager.checkAndExpandSnippet(content: content) {
+            // Snippet matched! Replace clipboard with expanded content
+            isRestoringClip = true  // Pause monitoring during expansion
+
+            pasteboard.clearContents()
+            pasteboard.setString(expandedContent, forType: .string)
+
+            // Update content to the expanded version for saving
+            content = expandedContent
+
+            // Brief delay before resuming
+            try? await Task.sleep(nanoseconds: 200_000_000)
+            isRestoringClip = false
+            lastChangeCount = pasteboard.changeCount
+        }
 
         // Check size limit
         let textSizeBytes = content.utf8.count
