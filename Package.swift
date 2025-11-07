@@ -18,6 +18,13 @@ let package = Package(
             dependencies: [
                 .product(name: "SQLite", package: "SQLite.swift")
             ]
+        ),
+        .testTarget(
+            name: "ClipboardManagerTests",
+            dependencies: [
+                "ClipboardManager",
+                .product(name: "SQLite", package: "SQLite.swift")
+            ]
         )
     ]
 )

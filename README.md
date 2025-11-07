@@ -91,7 +91,7 @@ For detailed security architecture, see [CLAUDE.md](CLAUDE.md).
 
 ## Development
 
-### Code Quality
+### Code Quality & Testing
 
 This project uses [SwiftLint](https://github.com/realm/SwiftLint) to ensure code quality and consistency.
 
@@ -104,6 +104,25 @@ SwiftLint runs automatically during builds via `create_app.sh`. You can also run
 ```bash
 swiftlint
 ```
+
+**Running Tests:**
+```bash
+# Run all tests
+swift test
+
+# Run with verbose output
+swift test -v
+
+# Run specific test suite
+swift test --filter ClipboardDatabaseTests
+```
+
+**Test Coverage:**
+- ✅ 75+ unit tests covering core functionality
+- ✅ Encryption/decryption tests
+- ✅ Database operations (CRUD, FTS search)
+- ✅ State management tests
+- ✅ Automated CI/CD via GitHub Actions
 
 ### Project Structure
 
