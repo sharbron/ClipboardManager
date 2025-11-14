@@ -385,10 +385,10 @@ final class AppStateTests: XCTestCase {
             let expectation = self.expectation(description: "Load clips")
             Task { @MainActor in
                 appState.loadClips()
-                try? await Task.sleep(nanoseconds: 200_000_000)
+                try? await Task.sleep(nanoseconds: 500_000_000)  // Give more time on CI
                 expectation.fulfill()
             }
-            wait(for: [expectation], timeout: 5.0)
+            wait(for: [expectation], timeout: 10.0)  // Longer timeout for CI
         }
     }
 }
