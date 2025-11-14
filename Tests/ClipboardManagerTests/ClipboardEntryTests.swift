@@ -15,7 +15,8 @@ final class ClipboardEntryTests: XCTestCase {
             content: "Short text",
             imageData: nil,
             isPinned: false,
-            sourceApp: nil
+            sourceApp: nil,
+            extractedText: nil
         )
 
         XCTAssertEqual(entry.previewText, "Short text", "Short text should not be truncated")
@@ -30,7 +31,8 @@ final class ClipboardEntryTests: XCTestCase {
             content: longText,
             imageData: nil,
             isPinned: false,
-            sourceApp: nil
+            sourceApp: nil,
+            extractedText: nil
         )
 
         XCTAssertTrue(entry.previewText.hasSuffix("..."), "Long text should be truncated with ellipsis")
@@ -47,7 +49,8 @@ final class ClipboardEntryTests: XCTestCase {
             content: text,
             imageData: nil,
             isPinned: false,
-            sourceApp: nil
+            sourceApp: nil,
+            extractedText: nil
         )
 
         // 50 characters exactly should not be truncated
@@ -64,7 +67,8 @@ final class ClipboardEntryTests: XCTestCase {
             content: multiline,
             imageData: nil,
             isPinned: false,
-            sourceApp: nil
+            sourceApp: nil,
+            extractedText: nil
         )
 
         XCTAssertFalse(entry.previewText.contains("\n"), "Preview should not contain newlines")
@@ -81,7 +85,8 @@ final class ClipboardEntryTests: XCTestCase {
             content: whitespaceText,
             imageData: nil,
             isPinned: false,
-            sourceApp: nil
+            sourceApp: nil,
+            extractedText: nil
         )
 
         XCTAssertEqual(entry.previewText, "Text with spaces", "Whitespace should be trimmed")
@@ -96,7 +101,8 @@ final class ClipboardEntryTests: XCTestCase {
             content: imageDescription,
             imageData: nil,
             isPinned: false,
-            sourceApp: nil
+            sourceApp: nil,
+            extractedText: nil
         )
 
         XCTAssertEqual(entry.previewText, imageDescription, "Image description should be used as-is")
@@ -110,7 +116,8 @@ final class ClipboardEntryTests: XCTestCase {
             content: "",
             imageData: nil,
             isPinned: false,
-            sourceApp: nil
+            sourceApp: nil,
+            extractedText: nil
         )
 
         XCTAssertEqual(entry.previewText, "", "Empty content should have empty preview")
@@ -124,7 +131,8 @@ final class ClipboardEntryTests: XCTestCase {
             content: "\n\n\n",
             imageData: nil,
             isPinned: false,
-            sourceApp: nil
+            sourceApp: nil,
+            extractedText: nil
         )
 
         XCTAssertEqual(entry.previewText, "", "Only newlines should result in empty preview")
@@ -140,7 +148,8 @@ final class ClipboardEntryTests: XCTestCase {
             content: "Test",
             imageData: nil,
             isPinned: false,
-            sourceApp: nil
+            sourceApp: nil,
+            extractedText: nil
         )
 
         let entry2 = ClipboardEntry(
@@ -150,7 +159,8 @@ final class ClipboardEntryTests: XCTestCase {
             content: "Different content",
             imageData: nil,
             isPinned: false,
-            sourceApp: nil
+            sourceApp: nil,
+            extractedText: nil
         )
 
         XCTAssertEqual(entry1, entry2, "Entries with same ID should be equal")
@@ -164,7 +174,8 @@ final class ClipboardEntryTests: XCTestCase {
             content: "Test",
             imageData: nil,
             isPinned: false,
-            sourceApp: nil
+            sourceApp: nil,
+            extractedText: nil
         )
 
         let entry2 = ClipboardEntry(
@@ -174,7 +185,8 @@ final class ClipboardEntryTests: XCTestCase {
             content: "Test",
             imageData: nil,
             isPinned: false,
-            sourceApp: nil
+            sourceApp: nil,
+            extractedText: nil
         )
 
         XCTAssertNotEqual(entry1, entry2, "Entries with different IDs should not be equal")
@@ -188,7 +200,8 @@ final class ClipboardEntryTests: XCTestCase {
             content: "Test",
             imageData: nil,
             isPinned: false,
-            sourceApp: nil
+            sourceApp: nil,
+            extractedText: nil
         )
 
         let entry2 = ClipboardEntry(
@@ -198,7 +211,8 @@ final class ClipboardEntryTests: XCTestCase {
             content: "Test",
             imageData: nil,
             isPinned: false,
-            sourceApp: nil
+            sourceApp: nil,
+            extractedText: nil
         )
 
         let entry3 = ClipboardEntry(
@@ -208,7 +222,8 @@ final class ClipboardEntryTests: XCTestCase {
             content: "Test",
             imageData: nil,
             isPinned: false,
-            sourceApp: nil
+            sourceApp: nil,
+            extractedText: nil
         )
 
         var set: Set<ClipboardEntry> = []
@@ -232,7 +247,8 @@ final class ClipboardEntryTests: XCTestCase {
             content: "[Image: 100x100]",
             imageData: imageData,
             isPinned: true,
-            sourceApp: "Safari"
+            sourceApp: "Safari",
+            extractedText: nil
         )
 
         XCTAssertEqual(entry.id, 42)
@@ -252,7 +268,8 @@ final class ClipboardEntryTests: XCTestCase {
             content: "Test",
             imageData: nil,
             isPinned: false,
-            sourceApp: nil
+            sourceApp: nil,
+            extractedText: nil
         )
 
         XCTAssertNil(entry.imageData, "imageData should be optional")
@@ -270,7 +287,8 @@ final class ClipboardEntryTests: XCTestCase {
             content: unicodeText,
             imageData: nil,
             isPinned: false,
-            sourceApp: nil
+            sourceApp: nil,
+            extractedText: nil
         )
 
         XCTAssertEqual(entry.previewText, unicodeText, "Unicode should be preserved")
@@ -285,7 +303,8 @@ final class ClipboardEntryTests: XCTestCase {
             content: unicodeText,
             imageData: nil,
             isPinned: false,
-            sourceApp: nil
+            sourceApp: nil,
+            extractedText: nil
         )
 
         XCTAssertTrue(entry.previewText.count <= 53, "Unicode text should be truncated properly")
