@@ -54,6 +54,7 @@ actor ClipboardDatabase {
 
     // FTS columns
     nonisolated(unsafe) private let rowid = Expression<Int64>("rowid")
+    nonisolated(unsafe) private let docid = Expression<Int64>("docid")  // FTS uses docid, not rowid
     nonisolated(unsafe) private let ftsContent = Expression<String>("content")
 
     // Encryption key and connection are set once during init and never modified
@@ -375,7 +376,7 @@ actor ClipboardDatabase {
             try db?.run(clip.delete())
 
             // Also delete from FTS index
-            let ftsClip = clipsFTS.filter(rowid == clipId)
+            let ftsClip = clipsFTS.filter(docid == clipId)  // FTS tables use docid
             try db?.run(ftsClip.delete())
 
             return true
@@ -399,7 +400,7 @@ actor ClipboardDatabase {
 
             var clipIds: [Int64] = []
             for row in results {
-                clipIds.append(row[rowid])
+                clipIds.append(row[docid])  // FTS tables use docid, not rowid
             }
 
             // Fetch full clip details for matching IDs
