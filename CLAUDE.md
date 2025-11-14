@@ -86,6 +86,71 @@ Sources/ClipboardManager/
 - Clean separation of concerns
 - No force unwraps or force casts
 
+## Testing
+
+### Test Coverage
+
+Comprehensive test suite covering:
+- **ClipboardDatabase** - Encryption/decryption, CRUD operations, FTS search
+- **AppState** - State management, clipboard operations, reactive updates
+- **ClipboardEntry** - Preview text generation, hashable conformance
+
+### Running Tests
+
+```bash
+# Run all tests
+swift test
+
+# Run tests with verbose output
+swift test -v
+
+# Run specific test class
+swift test --filter ClipboardDatabaseTests
+
+# Run with code coverage
+swift test --enable-code-coverage
+
+# Generate code coverage report
+xcrun llvm-cov show .build/debug/ClipboardManagerPackageTests.xctest/Contents/MacOS/ClipboardManagerPackageTests \
+  -instr-profile .build/debug/codecov/default.profdata
+```
+
+### Test Files
+
+```
+Tests/ClipboardManagerTests/
+├── ClipboardDatabaseTests.swift   # Database & encryption tests (40+ tests)
+├── AppStateTests.swift            # State management tests (20+ tests)
+└── ClipboardEntryTests.swift      # Data model tests (15+ tests)
+```
+
+### Continuous Integration
+
+GitHub Actions automatically runs:
+- ✅ All unit tests on every push/PR
+- ✅ SwiftLint checks for code quality
+- ✅ Release build verification
+- ✅ Code coverage reporting (via Codecov)
+
+See `.github/workflows/tests.yml` for CI configuration.
+
+### Writing New Tests
+
+When adding new features:
+1. Write tests first (TDD approach recommended)
+2. Use `async/await` for testing actor methods
+3. Clean up test data in `tearDown()`
+4. Use descriptive test names: `testFeatureName_Condition_ExpectedResult()`
+
+Example:
+```swift
+func testSaveClip_WithValidContent_StoresEncrypted() async throws {
+    await database.saveClip("Test content")
+    let clips = await database.getRecentClips(limit: 10)
+    XCTAssertEqual(clips.first?.content, "Test content")
+}
+```
+
 ## Building the App
 
 ### Requirements
@@ -223,10 +288,12 @@ Users must run: `xattr -cr /Applications/ClipboardManager.app` on first install.
 - [ ] Password-protected clips
 
 ### Technical Debt
-- Add unit tests for ClipboardDatabase encryption/decryption
-- Add integration tests for clipboard monitoring
+- ✅ ~~Add unit tests for ClipboardDatabase encryption/decryption~~ (COMPLETED)
+- ✅ ~~Add integration tests for clipboard monitoring~~ (COMPLETED)
 - Consider performance optimization for large databases (>10k entries)
 - Document public APIs with doc comments
+- Add UI tests for menu bar and search windows
+- Add integration tests with actual NSPasteboard (requires test fixtures)
 
 ## Resources
 

@@ -1,6 +1,8 @@
 import Foundation
 import SQLite
 import CryptoKit
+import Vision
+import AppKit
 
 struct ClipboardEntry: Hashable {
     let id: Int64
@@ -10,10 +12,20 @@ struct ClipboardEntry: Hashable {
     let imageData: Data?  // Optional - loaded on demand for performance
     let isPinned: Bool
     let sourceApp: String?  // Name of app that created this clip
+    let extractedText: String?  // OCR extracted text from images
 
     // Cached preview text for better performance
     var previewText: String {
         if contentType == "image" {
+            // If we have extracted text, show it
+            if let extracted = extractedText, !extracted.isEmpty {
+                var preview = extracted.replacingOccurrences(of: "\n", with: " ")
+                preview = preview.trimmingCharacters(in: .whitespacesAndNewlines)
+                if preview.count > 50 {
+                    preview = String(preview.prefix(50)) + "..."
+                }
+                return "[Image with text]: " + preview
+            }
             return content
         }
         var preview = content.replacingOccurrences(of: "\n", with: " ")
@@ -38,6 +50,7 @@ actor ClipboardDatabase {
     nonisolated(unsafe) private let imageData = Expression<Data?>("image_data")
     nonisolated(unsafe) private let isPinned = Expression<Bool>("is_pinned")
     nonisolated(unsafe) private let sourceApp = Expression<String?>("source_app")
+    nonisolated(unsafe) private let extractedText = Expression<String?>("extracted_text")
 
     // FTS columns
     nonisolated(unsafe) private let rowid = Expression<Int64>("rowid")
@@ -109,6 +122,7 @@ actor ClipboardDatabase {
         var hasImageDataColumn = false
         var hasPinnedColumn = false
         var hasSourceAppColumn = false
+        var hasExtractedTextColumn = false
 
         for row in tableInfo {
             if let columnName = row[1] as? String {
@@ -120,6 +134,9 @@ actor ClipboardDatabase {
                 }
                 if columnName == "source_app" {
                     hasSourceAppColumn = true
+                }
+                if columnName == "extracted_text" {
+                    hasExtractedTextColumn = true
                 }
             }
         }
@@ -140,6 +157,12 @@ actor ClipboardDatabase {
         if !hasSourceAppColumn {
             try db.run("ALTER TABLE clips ADD COLUMN source_app TEXT")
             print("Database migrated: added source_app column")
+        }
+
+        // Add extracted_text column if it doesn't exist
+        if !hasExtractedTextColumn {
+            try db.run("ALTER TABLE clips ADD COLUMN extracted_text TEXT")
+            print("Database migrated: added extracted_text column")
         }
     }
 
@@ -213,8 +236,48 @@ actor ClipboardDatabase {
         }
     }
 
+    // MARK: - OCR
+
+    /// Extract text from image data using Vision framework
+    private func extractTextFromImage(_ imageData: Data) async -> String? {
+        guard let image = NSImage(data: imageData),
+              let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
+            return nil
+        }
+
+        return await withCheckedContinuation { continuation in
+            let request = VNRecognizeTextRequest { request, error in
+                guard error == nil,
+                      let observations = request.results as? [VNRecognizedTextObservation] else {
+                    continuation.resume(returning: nil)
+                    return
+                }
+
+                let recognizedText = observations.compactMap { observation in
+                    observation.topCandidates(1).first?.string
+                }.joined(separator: "\n")
+
+                continuation.resume(returning: recognizedText.isEmpty ? nil : recognizedText)
+            }
+
+            // Configure for accurate text recognition
+            request.recognitionLevel = .accurate
+            request.usesLanguageCorrection = true
+
+            let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
+            try? handler.perform([request])
+        }
+    }
+
     func saveClip(_ text: String, type: String = "text", image: Data? = nil, rtfData: Data? = nil, sourceApp: String? = nil) async {
         guard let encryptedContent = encrypt(text) else { return }
+
+        // Perform OCR on images if enabled
+        var ocrText: String?
+        let ocrEnabled = UserDefaults.standard.bool(forKey: "ocrEnabled")
+        if type == "image", let imageData = image, (ocrEnabled || !UserDefaults.standard.dictionaryRepresentation().keys.contains("ocrEnabled")) {
+            ocrText = await extractTextFromImage(imageData)
+        }
 
         do {
             let now = isoFormatter.string(from: Date())
@@ -226,15 +289,20 @@ actor ClipboardDatabase {
                 content <- encryptedContent,
                 imageData <- binaryData,
                 isPinned <- false,
-                self.sourceApp <- sourceApp
+                self.sourceApp <- sourceApp,
+                extractedText <- ocrText
             ))
 
             // Add to FTS index for fast searching
-            // Store decrypted content in FTS for searchability
+            // Store decrypted content + extracted text in FTS for searchability
             if let clipId = clipId {
+                var searchableText = text
+                if let extracted = ocrText, !extracted.isEmpty {
+                    searchableText += " " + extracted
+                }
                 try db?.run(clipsFTS.insert(
                     rowid <- clipId,
-                    ftsContent <- text
+                    ftsContent <- searchableText
                 ))
             }
         } catch {
@@ -261,7 +329,8 @@ actor ClipboardDatabase {
                         content: decryptedContent,
                         imageData: nil,  // Don't load image data here - load on demand for performance
                         isPinned: row[isPinned],
-                        sourceApp: row[sourceApp]
+                        sourceApp: row[sourceApp],
+                        extractedText: row[extractedText]
                     )
                     entries.append(entry)
                 }
@@ -347,7 +416,8 @@ actor ClipboardDatabase {
                             content: decryptedContent,
                             imageData: nil,  // Lazy load image data
                             isPinned: row[isPinned],
-                            sourceApp: row[sourceApp]
+                            sourceApp: row[sourceApp],
+                            extractedText: row[extractedText]
                         )
                         entries.append(entry)
                     }

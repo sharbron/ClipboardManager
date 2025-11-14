@@ -1,0 +1,99 @@
+name: Tests
+
+on:
+  push:
+    branches: [ main, develop, "claude/**" ]
+  pull_request:
+    branches: [ main, develop ]
+
+jobs:
+  test:
+    name: Run Tests
+    runs-on: macos-13  # macOS 13 Ventura (minimum supported version)
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup Xcode
+      uses: maxim-lobanov/setup-xcode@v1
+      with:
+        xcode-version: '15.0'
+
+    - name: Swift Version
+      run: swift --version
+
+    - name: Build
+      run: swift build -v
+
+    - name: Run Tests
+      run: swift test --enable-code-coverage
+
+    - name: Generate Code Coverage Report
+      run: |
+        xcrun llvm-cov export -format="lcov" \
+          .build/debug/ClipboardManagerPackageTests.xctest/Contents/MacOS/ClipboardManagerPackageTests \
+          -instr-profile .build/debug/codecov/default.profdata > coverage.lcov
+
+    - name: Upload Coverage to Codecov
+      uses: codecov/codecov-action@v3
+      with:
+        files: ./coverage.lcov
+        fail_ci_if_error: false
+
+    - name: Test Summary
+      run: |
+        echo "✅ All tests passed!"
+        swift test --list-tests
+
+  lint:
+    name: SwiftLint
+    runs-on: macos-13
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Install SwiftLint
+      run: brew install swiftlint
+
+    - name: Run SwiftLint
+      run: |
+        swiftlint --reporter github-actions-logging
+
+    - name: Lint Summary
+      run: |
+        echo "✅ SwiftLint checks passed!"
+
+  build-release:
+    name: Build Release
+    runs-on: macos-13
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Build Release
+      run: swift build -c release
+
+    - name: Create App Bundle
+      run: |
+        chmod +x create_app.sh
+        ./create_app.sh
+
+    - name: Verify App Bundle
+      run: |
+        if [ -d "ClipboardManager.app" ]; then
+          echo "✅ App bundle created successfully"
+          ls -lh ClipboardManager.app/Contents/MacOS/
+        else
+          echo "❌ App bundle not found"
+          exit 1
+        fi
+
+    - name: Upload App Bundle
+      uses: actions/upload-artifact@v3
+      with:
+        name: ClipboardManager-app
+        path: ClipboardManager.app/
+        retention-days: 7
