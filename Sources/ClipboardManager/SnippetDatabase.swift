@@ -39,9 +39,11 @@ actor SnippetDatabase {
     private let isoFormatter = ISO8601DateFormatter()
 
     init(databasePath: String? = nil) {
+        // Initialize all properties first before any method calls to satisfy Swift 6 concurrency
         do {
             let path = databasePath ?? (NSHomeDirectory() + "/.clipboard_snippets.db")
-            db = try Connection(path)
+            let connection = try Connection(path)
+            db = connection
 
             // Set restrictive file permissions (owner read/write only)
             try FileManager.default.setAttributes(
@@ -49,7 +51,19 @@ actor SnippetDatabase {
                 ofItemAtPath: path
             )
 
-            try initializeDatabase()
+            // Initialize database schema inline
+            try connection.run(snippets.create(ifNotExists: true) { table in
+                table.column(id, primaryKey: .autoincrement)
+                table.column(trigger, unique: true)
+                table.column(content)
+                table.column(description)
+                table.column(createdAt)
+                table.column(usageCount, defaultValue: 0)
+            })
+
+            // Create index for faster trigger lookups
+            try connection.run(snippets.createIndex(trigger, ifNotExists: true))
+
             isInitialized = true
         } catch {
             print("Failed to initialize snippet database: \(error)")
