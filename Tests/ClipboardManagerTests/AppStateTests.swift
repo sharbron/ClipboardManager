@@ -6,6 +6,8 @@ import XCTest
 @MainActor
 final class AppStateTests: XCTestCase {
     var database: ClipboardDatabase!
+    var snippetDatabase: SnippetDatabase!
+    var snippetManager: SnippetManager!
     var appState: AppState!
 
     override func setUp() async throws {
@@ -17,8 +19,13 @@ final class AppStateTests: XCTestCase {
         // Wait for database to initialize
         try await Task.sleep(nanoseconds: 100_000_000)
 
-        // Create app state
-        appState = AppState(database: database)
+        // Create snippet database and manager
+        snippetDatabase = SnippetDatabase()
+        try await Task.sleep(nanoseconds: 100_000_000)
+        snippetManager = SnippetManager(database: snippetDatabase)
+
+        // Create app state with all dependencies
+        appState = AppState(database: database, snippetDatabase: snippetDatabase, snippetManager: snippetManager)
 
         // Clear any existing clips for clean test state
         _ = await database.clearAllHistory(keepPinned: false)
