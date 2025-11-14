@@ -78,7 +78,7 @@ actor SnippetDatabase {
             let now = isoFormatter.string(from: Date())
 
             // Check if trigger already exists
-            if let existing = try db?.pluck(snippets.filter(self.trigger == trigger)) {
+            if (try db?.pluck(snippets.filter(self.trigger == trigger))) != nil {
                 // Update existing snippet
                 try db?.run(snippets.filter(self.trigger == trigger).update(
                     self.content <- content,
@@ -129,9 +129,9 @@ actor SnippetDatabase {
         return results
     }
 
-    func getSnippet(byTrigger trigger: String) async -> Snippet? {
+    func getSnippet(byTrigger triggerValue: String) async -> Snippet? {
         do {
-            guard let row = try db?.pluck(snippets.filter(self.trigger == trigger)) else {
+            guard let row = try db?.pluck(snippets.filter(self.trigger == triggerValue)) else {
                 return nil
             }
 
