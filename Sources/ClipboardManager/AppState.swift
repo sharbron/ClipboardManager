@@ -86,7 +86,9 @@ class AppState: ObservableObject {
         clipboardMonitor?.resumeMonitoring()
 
         // Show notification if enabled (skip in test environment)
-        if Bundle.main.bundleIdentifier != nil {
+        // Check if we're in a test by looking for xctest in the process name
+        let isTestEnvironment = ProcessInfo.processInfo.processName.contains("xctest")
+        if !isTestEnvironment {
             let enableNotifications = UserDefaults.standard.bool(forKey: "enableNotifications")
             if enableNotifications || !UserDefaults.standard.dictionaryRepresentation().keys.contains("enableNotifications") {
                 let notification = UNMutableNotificationContent()
@@ -146,7 +148,9 @@ class AppState: ObservableObject {
         await snippetDatabase.incrementUsageCount(trigger: snippet.trigger)
 
         // Show notification (skip in test environment)
-        if Bundle.main.bundleIdentifier != nil {
+        // Check if we're in a test by looking for xctest in the process name
+        let isTestEnvironment = ProcessInfo.processInfo.processName.contains("xctest")
+        if !isTestEnvironment {
             let enableNotifications = UserDefaults.standard.bool(forKey: "enableNotifications")
             if enableNotifications || !UserDefaults.standard.dictionaryRepresentation().keys.contains("enableNotifications") {
                 let notification = UNMutableNotificationContent()
