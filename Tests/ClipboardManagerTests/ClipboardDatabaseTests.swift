@@ -23,7 +23,7 @@ final class ClipboardDatabaseTests: XCTestCase {
         try await Task.sleep(nanoseconds: 100_000_000)
 
         // Verify database is initialized
-        XCTAssertTrue(database.isInitialized, "Database should be initialized")
+        XCTAssertTrue(await database.isInitialized, "Database should be initialized")
     }
 
     override func tearDown() async throws {
