@@ -554,11 +554,9 @@ actor ClipboardDatabase {
             // Use FTS MATCH for fast full-text search
             // Escape special FTS characters to prevent query errors
             let escapedQuery = query.replacingOccurrences(of: "\"", with: "\"\"")
-
-            // Use raw SQL to properly access docid from FTS4 table
-            // FTS4 uses 'docid' as the special column for rowid
-            let ftsSQL = "SELECT docid FROM clips_fts WHERE clips_fts MATCH ?"
-            let statement = try db.prepare(ftsSQL, escapedQuery)
+            // Select rowid explicitly from FTS results
+            let ftsQuery = clipsFTS.select(rowid).filter(clipsFTS.match(escapedQuery))
+            let results = try db.prepare(ftsQuery)
 
             var clipIds: [Int64] = []
             for row in statement {
