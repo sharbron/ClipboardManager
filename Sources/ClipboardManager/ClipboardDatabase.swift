@@ -90,8 +90,6 @@ actor ClipboardDatabase {
             let localContent = content
             let localImageData = imageData
             let localIsPinned = isPinned
-            let localSourceApp = sourceApp
-            let localExtractedText = extractedText
             let localFtsContent = ftsContent
             let localRowid = rowid
 
@@ -204,20 +202,21 @@ actor ClipboardDatabase {
                     encryptionKey = key
 
                     // Now decrypt and populate FTS
-                    if let encKey = encryptionKey,
-                       let encryptedText = row[localContent],
-                       let data = Data(base64Encoded: encryptedText) {
-                        do {
-                            let sealedBox = try AES.GCM.SealedBox(combined: data)
-                            let decryptedData = try AES.GCM.open(sealedBox, using: encKey)
-                            if let decryptedContent = String(data: decryptedData, encoding: .utf8) {
-                                try connection.run(localClipsFTS.insert(
-                                    localRowid <- row[localId],
-                                    localFtsContent <- decryptedContent
-                                ))
+                    if let encKey = encryptionKey {
+                        let encryptedText = row[localContent]
+                        if let data = Data(base64Encoded: encryptedText) {
+                            do {
+                                let sealedBox = try AES.GCM.SealedBox(combined: data)
+                                let decryptedData = try AES.GCM.open(sealedBox, using: encKey)
+                                if let decryptedContent = String(data: decryptedData, encoding: .utf8) {
+                                    try connection.run(localClipsFTS.insert(
+                                        localRowid <- row[localId],
+                                        localFtsContent <- decryptedContent
+                                    ))
+                                }
+                            } catch {
+                                // Skip this entry if decryption fails
                             }
-                        } catch {
-                            // Skip this entry if decryption fails
                         }
                     }
                 }
