@@ -61,8 +61,8 @@ actor ClipboardDatabase {
     // Safe because: init runs single-threaded, then all access is serialized by actor
     private var encryptionKey: SymmetricKey?
 
-    // isInitialized is written only in init, then read-only - safe for nonisolated(unsafe)
-    private var isInitialized = false
+    // isInitialized is written only in init, then read-only
+    var isInitialized = false
 
     // Reuse ISO8601DateFormatter for better performance
     private let isoFormatter = ISO8601DateFormatter()
@@ -81,23 +81,37 @@ actor ClipboardDatabase {
                 ofItemAtPath: path
             )
 
+            // Capture all column/table expressions in local variables before closures
+            let localClips = clips
+            let localClipsFTS = clipsFTS
+            let localId = id
+            let localTimestamp = timestamp
+            let localContentType = contentType
+            let localContent = content
+            let localImageData = imageData
+            let localIsPinned = isPinned
+            let localSourceApp = sourceApp
+            let localExtractedText = extractedText
+            let localFtsContent = ftsContent
+            let localRowid = rowid
+
             // Initialize database schema inline
-            try connection.run(clips.create(ifNotExists: true) { table in
-                table.column(id, primaryKey: .autoincrement)
-                table.column(timestamp)
-                table.column(contentType)
-                table.column(content)
-                table.column(imageData)
-                table.column(isPinned, defaultValue: false)
+            try connection.run(localClips.create(ifNotExists: true) { table in
+                table.column(localId, primaryKey: .autoincrement)
+                table.column(localTimestamp)
+                table.column(localContentType)
+                table.column(localContent)
+                table.column(localImageData)
+                table.column(localIsPinned, defaultValue: false)
             })
 
             // Create indexes for faster searches and filtering
-            try connection.run(clips.createIndex(timestamp, ifNotExists: true))
-            try connection.run(clips.createIndex(isPinned, ifNotExists: true))
-            try connection.run(clips.createIndex(contentType, ifNotExists: true))
+            try connection.run(localClips.createIndex(localTimestamp, ifNotExists: true))
+            try connection.run(localClips.createIndex(localIsPinned, ifNotExists: true))
+            try connection.run(localClips.createIndex(localContentType, ifNotExists: true))
 
             // Create FTS4 virtual table for full-text search
-            try connection.run(clipsFTS.create(.FTS4([ftsContent]), ifNotExists: true))
+            try connection.run(localClipsFTS.create(.FTS4([localFtsContent]), ifNotExists: true))
 
             // Migrate database inline
             let tableInfo = try connection.prepare("PRAGMA table_info(clips)")
@@ -144,10 +158,10 @@ actor ClipboardDatabase {
             }
 
             // Populate FTS index inline
-            let count = try connection.scalar(clipsFTS.count)
+            let count = try connection.scalar(localClipsFTS.count)
             if count == 0 {
                 // Get all clips and populate FTS
-                let allClips = try connection.prepare(clips)
+                let allClips = try connection.prepare(localClips)
                 for row in allClips {
                     // Inline decryption - get or create key first
                     let service = "clipboard_manager_swift"
@@ -191,15 +205,15 @@ actor ClipboardDatabase {
 
                     // Now decrypt and populate FTS
                     if let encKey = encryptionKey,
-                       let encryptedText = row[content] as? String,
+                       let encryptedText = row[localContent],
                        let data = Data(base64Encoded: encryptedText) {
                         do {
                             let sealedBox = try AES.GCM.SealedBox(combined: data)
                             let decryptedData = try AES.GCM.open(sealedBox, using: encKey)
                             if let decryptedContent = String(data: decryptedData, encoding: .utf8) {
-                                try connection.run(clipsFTS.insert(
-                                    rowid <- row[id],
-                                    ftsContent <- decryptedContent
+                                try connection.run(localClipsFTS.insert(
+                                    localRowid <- row[localId],
+                                    localFtsContent <- decryptedContent
                                 ))
                             }
                         } catch {

@@ -33,7 +33,7 @@ actor SnippetDatabase {
     private let createdAt = Expression<String>("created_at")
     private let usageCount = Expression<Int>("usage_count")
 
-    private var isInitialized = false
+    var isInitialized = false
 
     // Reuse ISO8601DateFormatter for better performance
     private let isoFormatter = ISO8601DateFormatter()
@@ -51,18 +51,27 @@ actor SnippetDatabase {
                 ofItemAtPath: path
             )
 
+            // Capture column expressions in local variables before closure
+            let localSnippets = snippets
+            let localId = id
+            let localTrigger = trigger
+            let localContent = content
+            let localDescription = description
+            let localCreatedAt = createdAt
+            let localUsageCount = usageCount
+
             // Initialize database schema inline
-            try connection.run(snippets.create(ifNotExists: true) { table in
-                table.column(id, primaryKey: .autoincrement)
-                table.column(trigger, unique: true)
-                table.column(content)
-                table.column(description)
-                table.column(createdAt)
-                table.column(usageCount, defaultValue: 0)
+            try connection.run(localSnippets.create(ifNotExists: true) { table in
+                table.column(localId, primaryKey: .autoincrement)
+                table.column(localTrigger, unique: true)
+                table.column(localContent)
+                table.column(localDescription)
+                table.column(localCreatedAt)
+                table.column(localUsageCount, defaultValue: 0)
             })
 
             // Create index for faster trigger lookups
-            try connection.run(snippets.createIndex(trigger, ifNotExists: true))
+            try connection.run(localSnippets.createIndex(localTrigger, ifNotExists: true))
 
             isInitialized = true
         } catch {
