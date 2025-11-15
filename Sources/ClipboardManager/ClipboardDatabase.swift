@@ -222,6 +222,7 @@ actor ClipboardDatabase {
                 }
             } else if encryptionKey == nil {
                 // FTS already populated but we still need encryption key
+                print("DEBUG: Loading encryption key (FTS already populated)")
                 let service = "clipboard_manager_swift"
                 let account = "encryption_key"
 
@@ -237,7 +238,9 @@ actor ClipboardDatabase {
 
                 if status == errSecSuccess, let keyData = result as? Data {
                     encryptionKey = SymmetricKey(data: keyData)
+                    print("DEBUG: Loaded existing encryption key from keychain")
                 } else {
+                    print("DEBUG: Creating new encryption key (keychain status: \(status))")
                     let newKey = SymmetricKey(size: .bits256)
                     let keyData = newKey.withUnsafeBytes { Data($0) }
 
@@ -249,10 +252,15 @@ actor ClipboardDatabase {
                         kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock
                     ]
 
-                    _ = SecItemAdd(addQuery as CFDictionary, nil)
+                    let addStatus = SecItemAdd(addQuery as CFDictionary, nil)
+                    if addStatus != errSecSuccess {
+                        print("ERROR: Failed to add encryption key to keychain (status: \(addStatus))")
+                    }
                     encryptionKey = newKey
                 }
             }
+
+            print("DEBUG: Database initialized. encryptionKey is \(encryptionKey == nil ? "nil" : "set")")
 
             isInitialized = true
         } catch {
@@ -443,7 +451,10 @@ actor ClipboardDatabase {
     }
 
     func saveClip(_ text: String, type: String = "text", image: Data? = nil, rtfData: Data? = nil, sourceApp: String? = nil) async {
-        guard let encryptedContent = encrypt(text) else { return }
+        guard let encryptedContent = encrypt(text) else {
+            print("ERROR: Failed to encrypt content - encryptionKey is nil")
+            return
+        }
 
         // Perform OCR on images if enabled
         var ocrText: String?
@@ -479,7 +490,7 @@ actor ClipboardDatabase {
                 ))
             }
         } catch {
-            // Silent failure
+            print("ERROR: Failed to save clip to database: \(error)")
         }
     }
 
