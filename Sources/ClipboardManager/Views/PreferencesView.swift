@@ -197,7 +197,9 @@ struct HistoryPreferencesView: View {
                         }
                         .onChange(of: maxClips) { newValue in
                             UserDefaults.standard.set(Int(newValue), forKey: "menuBarClipCount")
-                            appState.loadClips()
+                            Task {
+                                await appState.loadClips()
+                            }
                         }
 
                         Text("Number of recent clips to display in the menu bar.")
@@ -575,7 +577,7 @@ struct AdvancedPreferencesView: View {
     private func clearLast24Hours() {
         Task {
             let deleted = await appState.database.clearLast24Hours()
-            appState.loadClips()
+            await appState.loadClips()
             loadStats()
 
             successMessage = "Removed \(deleted) clip\(deleted == 1 ? "" : "s") from the last 24 hours."
@@ -586,7 +588,7 @@ struct AdvancedPreferencesView: View {
     private func clearAllHistory() {
         Task {
             let deleted = await appState.database.clearAllHistory(keepPinned: true)
-            appState.loadClips()
+            await appState.loadClips()
             loadStats()
 
             let clipWord = deleted == 1 ? "clip" : "clips"
