@@ -62,7 +62,7 @@ actor ClipboardDatabase {
     nonisolated(unsafe) private var encryptionKey: SymmetricKey?
 
     // isInitialized is written only in init, then read-only - safe for nonisolated(unsafe)
-    nonisolated(unsafe) private(set) var isInitialized = false
+    nonisolated(unsafe) private var isInitialized = false
 
     // Reuse ISO8601DateFormatter for better performance
     private let isoFormatter = ISO8601DateFormatter()
