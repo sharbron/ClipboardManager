@@ -11,8 +11,6 @@ class AppState: ObservableObject {
     let snippetDatabase: SnippetDatabase
     let snippetManager: SnippetManager
     weak var clipboardMonitor: ClipboardMonitor?
-    private var loadTask: Task<Void, Never>?
-    private var snippetLoadTask: Task<Void, Never>?
 
     init(database: ClipboardDatabase, snippetDatabase: SnippetDatabase, snippetManager: SnippetManager) {
         self.database = database
@@ -25,9 +23,6 @@ class AppState: ObservableObject {
     }
 
     func loadClips() async {
-        // Cancel any pending load task to prevent race conditions
-        loadTask?.cancel()
-
         let limit = UserDefaults.standard.integer(forKey: "menuBarClipCount")
         clips = await database.getRecentClips(limit: limit > 0 ? limit : 15)
     }
@@ -91,8 +86,6 @@ class AppState: ObservableObject {
     // MARK: - Snippet Management
 
     func loadSnippets() async {
-        snippetLoadTask?.cancel()
-
         snippets = await snippetDatabase.getAllSnippets()
         await snippetManager.loadSnippets()
     }

@@ -16,16 +16,27 @@ final class AppStateTests: XCTestCase {
         // Create database
         database = ClipboardDatabase()
 
-        // Wait for database to initialize
-        try await Task.sleep(nanoseconds: 100_000_000)
+        // Wait for database to be fully initialized
+        var initialized = await database.isInitialized
+        while !initialized {
+            try await Task.sleep(nanoseconds: 10_000_000)
+            initialized = await database.isInitialized
+        }
 
         // Create snippet database and manager
         snippetDatabase = SnippetDatabase()
-        try await Task.sleep(nanoseconds: 100_000_000)
+        var snippetsInitialized = await snippetDatabase.isInitialized
+        while !snippetsInitialized {
+            try await Task.sleep(nanoseconds: 10_000_000)
+            snippetsInitialized = await snippetDatabase.isInitialized
+        }
         snippetManager = SnippetManager(database: snippetDatabase)
 
         // Create app state with all dependencies
         appState = AppState(database: database, snippetDatabase: snippetDatabase, snippetManager: snippetManager)
+
+        // Wait for init Task to complete
+        try await Task.sleep(nanoseconds: 50_000_000)
 
         // Clear any existing clips for clean test state
         _ = await database.clearAllHistory(keepPinned: false)
