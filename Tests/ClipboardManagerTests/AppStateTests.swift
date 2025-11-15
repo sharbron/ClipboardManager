@@ -32,14 +32,14 @@ final class AppStateTests: XCTestCase {
         }
         snippetManager = SnippetManager(database: snippetDatabase)
 
+        // Clear any existing clips BEFORE creating appState for clean test state
+        _ = await database.clearAllHistory(keepPinned: false)
+
         // Create app state with all dependencies
         appState = AppState(database: database, snippetDatabase: snippetDatabase, snippetManager: snippetManager)
 
-        // Wait for init Task to complete
+        // Wait for init Task to complete (should load empty database)
         try await Task.sleep(nanoseconds: 50_000_000)
-
-        // Clear any existing clips for clean test state
-        _ = await database.clearAllHistory(keepPinned: false)
     }
 
     @MainActor
@@ -67,6 +67,10 @@ final class AppStateTests: XCTestCase {
         await database.saveClip("Clip 1")
         await database.saveClip("Clip 2")
         await database.saveClip("Clip 3")
+
+        // Verify clips were saved to database
+        let dbClips = await database.getRecentClips(limit: 10)
+        XCTAssertEqual(dbClips.count, 3, "Database should have 3 clips")
 
         // Load clips in app state
         await appState.loadClips()
