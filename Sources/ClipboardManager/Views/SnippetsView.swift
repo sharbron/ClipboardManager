@@ -274,6 +274,7 @@ struct AddSnippetView: View {
         }
     }
 
+    @MainActor
     private func saveSnippet() {
         // Validate trigger
         guard !trigger.isEmpty, !description.isEmpty, !content.isEmpty else {
@@ -418,6 +419,7 @@ struct ImportExportView: View {
         }
     }
 
+    @MainActor
     private func handleImport(_ result: Result<URL, Error>) {
         switch result {
         case .success(let url):

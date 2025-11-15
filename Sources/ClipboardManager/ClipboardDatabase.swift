@@ -394,7 +394,8 @@ actor ClipboardDatabase {
             // Use FTS MATCH for fast full-text search
             // Escape special FTS characters to prevent query errors
             let escapedQuery = query.replacingOccurrences(of: "\"", with: "\"\"")
-            let ftsQuery = clipsFTS.match(escapedQuery) as QueryType
+            // Select rowid explicitly from FTS results
+            let ftsQuery = clipsFTS.select(rowid).filter(clipsFTS.match(escapedQuery))
             let results = try db.prepare(ftsQuery)
 
             var clipIds: [Int64] = []

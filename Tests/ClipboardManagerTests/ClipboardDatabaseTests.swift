@@ -24,6 +24,9 @@ final class ClipboardDatabaseTests: XCTestCase {
 
         // Verify database is initialized
         XCTAssertTrue(database.isInitialized, "Database should be initialized")
+
+        // Clear any existing data for test isolation
+        _ = await database.clearAllHistory(keepPinned: false)
     }
 
     override func tearDown() async throws {
