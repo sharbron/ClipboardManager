@@ -101,7 +101,7 @@ actor SnippetDatabase {
             let now = isoFormatter.string(from: Date())
 
             // Check if trigger already exists
-            if let existing = try db?.pluck(snippets.filter(self.trigger == trigger)) {
+            if try db?.pluck(snippets.filter(self.trigger == trigger)) != nil {
                 // Update existing snippet
                 try db?.run(snippets.filter(self.trigger == trigger).update(
                     self.content <- content,
@@ -129,19 +129,19 @@ actor SnippetDatabase {
         var results: [Snippet] = []
 
         do {
-            guard let rows = try db?.prepare(snippets.order(usageCount.desc, trigger.asc)) else {
+            guard let rows = try db?.prepare(snippets.order(usageCount.desc, self.trigger.asc)) else {
                 return results
             }
 
             for row in rows {
-                let date = isoFormatter.date(from: row[createdAt]) ?? Date()
+                let date = isoFormatter.date(from: row[self.createdAt]) ?? Date()
                 let snippet = Snippet(
-                    id: row[id],
-                    trigger: row[trigger],
-                    content: row[content],
-                    description: row[description],
+                    id: row[self.id],
+                    trigger: row[self.trigger],
+                    content: row[self.content],
+                    description: row[self.description],
                     createdAt: date,
-                    usageCount: row[usageCount]
+                    usageCount: row[self.usageCount]
                 )
                 results.append(snippet)
             }
@@ -158,14 +158,14 @@ actor SnippetDatabase {
                 return nil
             }
 
-            let date = isoFormatter.date(from: row[createdAt]) ?? Date()
+            let date = isoFormatter.date(from: row[self.createdAt]) ?? Date()
             return Snippet(
-                id: row[id],
-                trigger: row[trigger],
-                content: row[content],
-                description: row[description],
+                id: row[self.id],
+                trigger: row[self.trigger],
+                content: row[self.content],
+                description: row[self.description],
                 createdAt: date,
-                usageCount: row[usageCount]
+                usageCount: row[self.usageCount]
             )
         } catch {
             print("Failed to fetch snippet: \(error)")
