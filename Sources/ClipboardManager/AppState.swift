@@ -18,46 +18,38 @@ class AppState: ObservableObject {
         self.database = database
         self.snippetDatabase = snippetDatabase
         self.snippetManager = snippetManager
-        loadClips()
-        loadSnippets()
+        Task {
+            await loadClips()
+            await loadSnippets()
+        }
     }
 
-    func loadClips() {
+    func loadClips() async {
         // Cancel any pending load task to prevent race conditions
         loadTask?.cancel()
 
-        loadTask = Task {
-            let limit = UserDefaults.standard.integer(forKey: "menuBarClipCount")
-            clips = await database.getRecentClips(limit: limit > 0 ? limit : 15)
-        }
+        let limit = UserDefaults.standard.integer(forKey: "menuBarClipCount")
+        clips = await database.getRecentClips(limit: limit > 0 ? limit : 15)
     }
 
-    func togglePin(clipId: Int64) {
-        Task {
-            _ = await database.togglePin(clipId: clipId)
-            loadClips()
-        }
+    func togglePin(clipId: Int64) async {
+        _ = await database.togglePin(clipId: clipId)
+        await loadClips()
     }
 
-    func deleteClip(clipId: Int64) {
-        Task {
-            _ = await database.deleteClip(clipId: clipId)
-            loadClips()
-        }
+    func deleteClip(clipId: Int64) async {
+        _ = await database.deleteClip(clipId: clipId)
+        await loadClips()
     }
 
-    func deleteAllClips() {
-        Task {
-            _ = await database.clearAllHistory(keepPinned: true)
-            loadClips()
-        }
+    func deleteAllClips() async {
+        _ = await database.clearAllHistory(keepPinned: true)
+        await loadClips()
     }
 
-    func deleteClipsFromLast24Hours() {
-        Task {
-            _ = await database.clearLast24Hours()
-            loadClips()
-        }
+    func deleteClipsFromLast24Hours() async {
+        _ = await database.clearLast24Hours()
+        await loadClips()
     }
 
     func copyToClipboard(clip: ClipboardEntry) async {
@@ -98,33 +90,27 @@ class AppState: ObservableObject {
 
     // MARK: - Snippet Management
 
-    func loadSnippets() {
+    func loadSnippets() async {
         snippetLoadTask?.cancel()
 
-        snippetLoadTask = Task {
-            snippets = await snippetDatabase.getAllSnippets()
-            await snippetManager.loadSnippets()
+        snippets = await snippetDatabase.getAllSnippets()
+        await snippetManager.loadSnippets()
+    }
+
+    func saveSnippet(trigger: String, content: String, description: String) async {
+        let success = await snippetDatabase.saveSnippet(
+            trigger: trigger,
+            content: content,
+            description: description
+        )
+        if success {
+            await loadSnippets()
         }
     }
 
-    func saveSnippet(trigger: String, content: String, description: String) {
-        Task {
-            let success = await snippetDatabase.saveSnippet(
-                trigger: trigger,
-                content: content,
-                description: description
-            )
-            if success {
-                loadSnippets()
-            }
-        }
-    }
-
-    func deleteSnippet(id: Int64) {
-        Task {
-            _ = await snippetDatabase.deleteSnippet(id: id)
-            loadSnippets()
-        }
+    func deleteSnippet(id: Int64) async {
+        _ = await snippetDatabase.deleteSnippet(id: id)
+        await loadSnippets()
     }
 
     func expandSnippet(_ snippet: Snippet) async {
@@ -154,21 +140,17 @@ class AppState: ObservableObject {
         }
     }
 
-    func createDefaultSnippets() {
-        Task {
-            await snippetDatabase.createDefaultSnippets()
-            loadSnippets()
-        }
+    func createDefaultSnippets() async {
+        await snippetDatabase.createDefaultSnippets()
+        await loadSnippets()
     }
 
     func exportSnippets() async -> [ExportableSnippet] {
         return await snippetDatabase.exportSnippets()
     }
 
-    func importSnippets(_ snippets: [ExportableSnippet], replaceExisting: Bool = false) {
-        Task {
-            _ = await snippetDatabase.importSnippets(snippets, replaceExisting: replaceExisting)
-            loadSnippets()
-        }
+    func importSnippets(_ snippets: [ExportableSnippet], replaceExisting: Bool = false) async {
+        _ = await snippetDatabase.importSnippets(snippets, replaceExisting: replaceExisting)
+        await loadSnippets()
     }
 }

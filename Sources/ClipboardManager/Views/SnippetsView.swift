@@ -84,7 +84,9 @@ struct SnippetsView: View {
                             .multilineTextAlignment(.center)
 
                         Button("Create Default Snippets") {
-                            appState.createDefaultSnippets()
+                            Task {
+                                await appState.createDefaultSnippets()
+                            }
                         }
                         .buttonStyle(.borderedProminent)
                     }
@@ -207,7 +209,9 @@ struct SnippetRow: View {
         .alert("Delete Snippet?", isPresented: $showingDeleteAlert) {
             Button("Cancel", role: .cancel) {}
             Button("Delete", role: .destructive) {
-                appState.deleteSnippet(id: snippet.id)
+                Task {
+                    await appState.deleteSnippet(id: snippet.id)
+                }
             }
         } message: {
             Text("Are you sure you want to delete '\(snippet.trigger)'?")
@@ -283,7 +287,9 @@ struct AddSnippetView: View {
             return
         }
 
-        appState.saveSnippet(trigger: trigger, content: content, description: description)
+        Task {
+            await appState.saveSnippet(trigger: trigger, content: content, description: description)
+        }
         isPresented = false
     }
 }
@@ -341,7 +347,9 @@ struct EditSnippetView: View {
                 Spacer()
 
                 Button("Save") {
-                    appState.saveSnippet(trigger: trigger, content: content, description: description)
+                    Task {
+                        await appState.saveSnippet(trigger: trigger, content: content, description: description)
+                    }
                     isPresented = false
                 }
                 .keyboardShortcut(.return)
@@ -425,7 +433,9 @@ struct ImportExportView: View {
         case .success(let url):
             if let data = try? Data(contentsOf: url),
                let snippets = try? JSONDecoder().decode([ExportableSnippet].self, from: data) {
-                appState.importSnippets(snippets, replaceExisting: false)
+                Task {
+                    await appState.importSnippets(snippets, replaceExisting: false)
+                }
             }
         case .failure:
             break

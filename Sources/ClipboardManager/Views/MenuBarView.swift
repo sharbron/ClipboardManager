@@ -112,7 +112,9 @@ struct ClipMenuItemView: View {
             }
 
             Button {
-                appState.togglePin(clipId: clip.id)
+                Task {
+                    await appState.togglePin(clipId: clip.id)
+                }
             } label: {
                 Label(clip.isPinned ? "Unpin" : "Pin", systemImage: clip.isPinned ? "pin.slash" : "pin")
             }
@@ -120,7 +122,9 @@ struct ClipMenuItemView: View {
             Divider()
 
             Button(role: .destructive) {
-                appState.deleteClip(clipId: clip.id)
+                Task {
+                    await appState.deleteClip(clipId: clip.id)
+                }
             } label: {
                 Label("Delete", systemImage: "trash")
             }

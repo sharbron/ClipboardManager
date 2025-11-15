@@ -58,10 +58,7 @@ final class AppStateTests: XCTestCase {
         await database.saveClip("Clip 3")
 
         // Load clips in app state
-        appState.loadClips()
-
-        // Wait for async load to complete
-        try await Task.sleep(nanoseconds: 200_000_000)
+        await appState.loadClips()
 
         // Verify clips are loaded
         XCTAssertEqual(appState.clips.count, 3, "Should load 3 clips")
@@ -79,8 +76,7 @@ final class AppStateTests: XCTestCase {
         UserDefaults.standard.set(10, forKey: "menuBarClipCount")
 
         // Load clips
-        appState.loadClips()
-        try await Task.sleep(nanoseconds: 200_000_000)
+        await appState.loadClips()
 
         // Verify limit is respected
         XCTAssertEqual(appState.clips.count, 10, "Should respect custom limit")
@@ -97,8 +93,7 @@ final class AppStateTests: XCTestCase {
         }
 
         // Load clips (should use default limit of 15)
-        appState.loadClips()
-        try await Task.sleep(nanoseconds: 200_000_000)
+        await appState.loadClips()
 
         // Verify default limit is used
         XCTAssertEqual(appState.clips.count, 15, "Should use default limit of 15")
@@ -110,8 +105,7 @@ final class AppStateTests: XCTestCase {
         _ = await database.clearAllHistory(keepPinned: false)
 
         // Load clips
-        appState.loadClips()
-        try await Task.sleep(nanoseconds: 200_000_000)
+        await appState.loadClips()
 
         // Verify no clips loaded
         XCTAssertEqual(appState.clips.count, 0, "Should have no clips")
@@ -125,8 +119,7 @@ final class AppStateTests: XCTestCase {
         await database.saveClip("Pin test")
 
         // Load clips
-        appState.loadClips()
-        try await Task.sleep(nanoseconds: 200_000_000)
+        await appState.loadClips()
 
         guard let clipId = appState.clips.first?.id else {
             XCTFail("No clips loaded")
@@ -137,15 +130,13 @@ final class AppStateTests: XCTestCase {
         XCTAssertFalse(appState.clips.first?.isPinned ?? true, "Should not be pinned initially")
 
         // Toggle pin
-        appState.togglePin(clipId: clipId)
-        try await Task.sleep(nanoseconds: 200_000_000)
+        await appState.togglePin(clipId: clipId)
 
         // Verify pinned
         XCTAssertTrue(appState.clips.first?.isPinned ?? false, "Should be pinned after toggle")
 
         // Toggle again
-        appState.togglePin(clipId: clipId)
-        try await Task.sleep(nanoseconds: 200_000_000)
+        await appState.togglePin(clipId: clipId)
 
         // Verify unpinned
         XCTAssertFalse(appState.clips.first?.isPinned ?? true, "Should be unpinned after second toggle")
@@ -159,8 +150,7 @@ final class AppStateTests: XCTestCase {
         await database.saveClip("Clip 3")
 
         // Load clips
-        appState.loadClips()
-        try await Task.sleep(nanoseconds: 200_000_000)
+        await appState.loadClips()
 
         // Get the last clip (oldest)
         guard let lastClip = appState.clips.last else {
@@ -169,8 +159,7 @@ final class AppStateTests: XCTestCase {
         }
 
         // Pin the oldest clip
-        appState.togglePin(clipId: lastClip.id)
-        try await Task.sleep(nanoseconds: 200_000_000)
+        await appState.togglePin(clipId: lastClip.id)
 
         // Verify pinned clip is now first
         XCTAssertTrue(appState.clips.first?.isPinned ?? false, "Pinned clip should be first")
@@ -186,8 +175,7 @@ final class AppStateTests: XCTestCase {
         await database.saveClip("Delete me")
 
         // Load clips
-        appState.loadClips()
-        try await Task.sleep(nanoseconds: 200_000_000)
+        await appState.loadClips()
 
         let initialCount = appState.clips.count
         guard let clipToDelete = appState.clips.first(where: { $0.content == "Delete me" }) else {
@@ -196,8 +184,7 @@ final class AppStateTests: XCTestCase {
         }
 
         // Delete clip
-        appState.deleteClip(clipId: clipToDelete.id)
-        try await Task.sleep(nanoseconds: 200_000_000)
+        await appState.deleteClip(clipId: clipToDelete.id)
 
         // Verify deletion
         XCTAssertEqual(appState.clips.count, initialCount - 1, "Clip count should decrease")
@@ -212,14 +199,12 @@ final class AppStateTests: XCTestCase {
         }
 
         // Load clips
-        appState.loadClips()
-        try await Task.sleep(nanoseconds: 200_000_000)
+        await appState.loadClips()
 
         XCTAssertEqual(appState.clips.count, 5, "Should have 5 clips")
 
         // Delete all clips
-        appState.deleteAllClips()
-        try await Task.sleep(nanoseconds: 200_000_000)
+        await appState.deleteAllClips()
 
         // Verify all deleted
         XCTAssertEqual(appState.clips.count, 0, "All clips should be deleted")
@@ -233,17 +218,14 @@ final class AppStateTests: XCTestCase {
         await database.saveClip("Regular 2")
 
         // Load and pin one clip
-        appState.loadClips()
-        try await Task.sleep(nanoseconds: 200_000_000)
+        await appState.loadClips()
 
         if let pinnedClip = appState.clips.first(where: { $0.content == "Pinned clip" }) {
-            appState.togglePin(clipId: pinnedClip.id)
-            try await Task.sleep(nanoseconds: 200_000_000)
+            await appState.togglePin(clipId: pinnedClip.id)
         }
 
         // Delete all (keeps pinned by default)
-        appState.deleteAllClips()
-        try await Task.sleep(nanoseconds: 200_000_000)
+        await appState.deleteAllClips()
 
         // Verify only pinned clip remains
         XCTAssertEqual(appState.clips.count, 1, "Only pinned clip should remain")
@@ -257,14 +239,12 @@ final class AppStateTests: XCTestCase {
         await database.saveClip("Recent clip")
 
         // Load clips
-        appState.loadClips()
-        try await Task.sleep(nanoseconds: 200_000_000)
+        await appState.loadClips()
 
         XCTAssertGreaterThan(appState.clips.count, 0, "Should have clips")
 
         // Delete clips from last 24 hours
-        appState.deleteClipsFromLast24Hours()
-        try await Task.sleep(nanoseconds: 200_000_000)
+        await appState.deleteClipsFromLast24Hours()
 
         // Verify deletion (recent clips should be removed)
         XCTAssertEqual(appState.clips.count, 0, "Recent clips should be deleted")
@@ -278,8 +258,7 @@ final class AppStateTests: XCTestCase {
         await database.saveClip("Test copy")
 
         // Load clips
-        appState.loadClips()
-        try await Task.sleep(nanoseconds: 200_000_000)
+        await appState.loadClips()
 
         guard let clip = appState.clips.first else {
             XCTFail("No clips loaded")
@@ -304,8 +283,7 @@ final class AppStateTests: XCTestCase {
         await database.saveClip(imageDescription, type: "image", image: mockImageData)
 
         // Load clips
-        appState.loadClips()
-        try await Task.sleep(nanoseconds: 200_000_000)
+        await appState.loadClips()
 
         guard let clip = appState.clips.first else {
             XCTFail("No clips loaded")
@@ -342,7 +320,7 @@ final class AppStateTests: XCTestCase {
 
         // Save and load clips
         await database.saveClip("Published clip")
-        appState.loadClips()
+        await appState.loadClips()
 
         // Wait for publication
         await fulfillment(of: [expectation], timeout: 2.0)
@@ -363,13 +341,10 @@ final class AppStateTests: XCTestCase {
             await database.saveClip("Clip \(i)")
         }
 
-        // Start multiple rapid loads (should cancel previous ones)
-        appState.loadClips()
-        appState.loadClips()
-        appState.loadClips()
-
-        // Wait for final load
-        try await Task.sleep(nanoseconds: 300_000_000)
+        // Load clips multiple times - the final one should succeed
+        await appState.loadClips()
+        await appState.loadClips()
+        await appState.loadClips()
 
         // Should complete without issues
         XCTAssertGreaterThan(appState.clips.count, 0, "Should load clips successfully")
@@ -384,8 +359,7 @@ final class AppStateTests: XCTestCase {
         await database.saveClip("Test")
 
         // Load clips (should work without monitor)
-        appState.loadClips()
-        try await Task.sleep(nanoseconds: 200_000_000)
+        await appState.loadClips()
 
         XCTAssertGreaterThan(appState.clips.count, 0, "Should load clips even without monitor")
     }
@@ -402,9 +376,7 @@ final class AppStateTests: XCTestCase {
         measure {
             let expectation = self.expectation(description: "Load clips")
             Task { @MainActor in
-                appState.loadClips()
-                // Small delay to allow async operation to start
-                try? await Task.sleep(nanoseconds: 50_000_000)
+                await appState.loadClips()
                 expectation.fulfill()
             }
             wait(for: [expectation], timeout: 2.0)

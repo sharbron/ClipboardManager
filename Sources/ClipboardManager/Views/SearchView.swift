@@ -378,7 +378,9 @@ struct ClipListItemView: View {
             }
 
             Button {
-                appState.togglePin(clipId: clip.id)
+                Task {
+                    await appState.togglePin(clipId: clip.id)
+                }
             } label: {
                 Label(clip.isPinned ? "Unpin" : "Pin", systemImage: clip.isPinned ? "pin.slash" : "pin")
             }
@@ -386,7 +388,9 @@ struct ClipListItemView: View {
             Divider()
 
             Button(role: .destructive) {
-                appState.deleteClip(clipId: clip.id)
+                Task {
+                    await appState.deleteClip(clipId: clip.id)
+                }
             } label: {
                 Label("Delete", systemImage: "trash")
             }
@@ -519,7 +523,9 @@ struct ClipPreviewView: View {
                 .controlSize(.small)
 
                 Button {
-                    appState.togglePin(clipId: clip.id)
+                    Task {
+                        await appState.togglePin(clipId: clip.id)
+                    }
                 } label: {
                     Label(clip.isPinned ? "Unpin" : "Pin", systemImage: clip.isPinned ? "pin.slash" : "pin")
                 }
@@ -550,7 +556,9 @@ struct ClipPreviewView: View {
         .alert("Delete Clip?", isPresented: $showingDeleteConfirmation) {
             Button("Cancel", role: .cancel) { }
             Button("Delete", role: .destructive) {
-                appState.deleteClip(clipId: clip.id)
+                Task {
+                    await appState.deleteClip(clipId: clip.id)
+                }
             }
         } message: {
             Text("Are you sure you want to delete this clip? This action cannot be undone.")
