@@ -65,19 +65,19 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         // Wait for database initialization
         Task {
-            var initialized = appState.database.isInitialized
+            var initialized = await appState.database.isInitialized
             while !initialized {
                 try? await Task.sleep(nanoseconds: 100_000_000)
-                initialized = appState.database.isInitialized
+                initialized = await appState.database.isInitialized
             }
 
             NSLog("✅ Database initialized")
 
             // Wait for snippet database initialization
-            var snippetInitialized = appState.snippetDatabase.isInitialized
+            var snippetInitialized = await appState.snippetDatabase.isInitialized
             while !snippetInitialized {
                 try? await Task.sleep(nanoseconds: 100_000_000)
-                snippetInitialized = appState.snippetDatabase.isInitialized
+                snippetInitialized = await appState.snippetDatabase.isInitialized
             }
 
             NSLog("✅ Snippet database initialized")
