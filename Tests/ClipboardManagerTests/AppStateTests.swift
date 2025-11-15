@@ -3,13 +3,13 @@ import XCTest
 
 /// Tests for AppState class
 /// Verifies state management and coordination between UI and database
-@MainActor
 final class AppStateTests: XCTestCase {
     var database: ClipboardDatabase!
     var snippetDatabase: SnippetDatabase!
     var snippetManager: SnippetManager!
     var appState: AppState!
 
+    @MainActor
     override func setUp() async throws {
         try await super.setUp()
 
@@ -31,6 +31,7 @@ final class AppStateTests: XCTestCase {
         _ = await database.clearAllHistory(keepPinned: false)
     }
 
+    @MainActor
     override func tearDown() async throws {
         // Clean up
         _ = await database.clearAllHistory(keepPinned: false)
@@ -40,6 +41,7 @@ final class AppStateTests: XCTestCase {
 
     // MARK: - Initialization Tests
 
+    @MainActor
     func testAppStateInitialization() async throws {
         XCTAssertNotNil(appState, "AppState should initialize")
         XCTAssertNotNil(appState.database, "AppState should have database reference")
@@ -48,6 +50,7 @@ final class AppStateTests: XCTestCase {
 
     // MARK: - Load Clips Tests
 
+    @MainActor
     func testLoadClips() async throws {
         // Save some clips to database
         await database.saveClip("Clip 1")
@@ -65,6 +68,7 @@ final class AppStateTests: XCTestCase {
         XCTAssertEqual(appState.clips[0].content, "Clip 3", "Most recent clip should be first")
     }
 
+    @MainActor
     func testLoadClipsWithLimit() async throws {
         // Save more clips than the default limit
         for i in 1...20 {
@@ -82,6 +86,7 @@ final class AppStateTests: XCTestCase {
         XCTAssertEqual(appState.clips.count, 10, "Should respect custom limit")
     }
 
+    @MainActor
     func testLoadClipsDefaultLimit() async throws {
         // Clear any custom limit
         UserDefaults.standard.removeObject(forKey: "menuBarClipCount")
@@ -99,6 +104,7 @@ final class AppStateTests: XCTestCase {
         XCTAssertEqual(appState.clips.count, 15, "Should use default limit of 15")
     }
 
+    @MainActor
     func testLoadClipsEmpty() async throws {
         // Ensure database is empty
         _ = await database.clearAllHistory(keepPinned: false)
@@ -113,6 +119,7 @@ final class AppStateTests: XCTestCase {
 
     // MARK: - Toggle Pin Tests
 
+    @MainActor
     func testTogglePin() async throws {
         // Save a clip
         await database.saveClip("Pin test")
@@ -144,6 +151,7 @@ final class AppStateTests: XCTestCase {
         XCTAssertFalse(appState.clips.first?.isPinned ?? true, "Should be unpinned after second toggle")
     }
 
+    @MainActor
     func testTogglePinUpdatesOrder() async throws {
         // Save multiple clips
         await database.saveClip("Clip 1")
@@ -171,6 +179,7 @@ final class AppStateTests: XCTestCase {
 
     // MARK: - Delete Tests
 
+    @MainActor
     func testDeleteClip() async throws {
         // Save clips
         await database.saveClip("Keep me")
@@ -195,6 +204,7 @@ final class AppStateTests: XCTestCase {
         XCTAssertNil(appState.clips.first(where: { $0.content == "Delete me" }), "Deleted clip should not exist")
     }
 
+    @MainActor
     func testDeleteAllClips() async throws {
         // Save multiple clips
         for i in 1...5 {
@@ -215,6 +225,7 @@ final class AppStateTests: XCTestCase {
         XCTAssertEqual(appState.clips.count, 0, "All clips should be deleted")
     }
 
+    @MainActor
     func testDeleteAllClipsKeepPinned() async throws {
         // Save clips
         await database.saveClip("Regular 1")
@@ -240,6 +251,7 @@ final class AppStateTests: XCTestCase {
         XCTAssertTrue(appState.clips.first?.isPinned ?? false)
     }
 
+    @MainActor
     func testDeleteClipsFromLast24Hours() async throws {
         // Save clips
         await database.saveClip("Recent clip")
@@ -260,6 +272,7 @@ final class AppStateTests: XCTestCase {
 
     // MARK: - Copy to Clipboard Tests
 
+    @MainActor
     func testCopyToClipboardText() async throws {
         // Save a text clip
         await database.saveClip("Test copy")
@@ -282,6 +295,7 @@ final class AppStateTests: XCTestCase {
         XCTAssertEqual(clipboardContent, "Test copy", "Clipboard should contain the clip content")
     }
 
+    @MainActor
     func testCopyToClipboardImage() async throws {
         let imageDescription = "[Image: 100x100]"
         let mockImageData = Data([0xFF, 0xD8, 0xFF, 0xE0])  // Mock JPEG header
@@ -312,6 +326,7 @@ final class AppStateTests: XCTestCase {
 
     // MARK: - Reactive Updates Tests
 
+    @MainActor
     func testClipsArePublished() async throws {
         // Create expectation for published value
         let expectation = XCTestExpectation(description: "Clips published")
@@ -341,6 +356,7 @@ final class AppStateTests: XCTestCase {
 
     // MARK: - Edge Cases
 
+    @MainActor
     func testLoadClipsCancellation() async throws {
         // Save many clips
         for i in 1...100 {
@@ -359,6 +375,7 @@ final class AppStateTests: XCTestCase {
         XCTAssertGreaterThan(appState.clips.count, 0, "Should load clips successfully")
     }
 
+    @MainActor
     func testLoadClipsWithoutMonitor() async throws {
         // Ensure clipboardMonitor is nil
         XCTAssertNil(appState.clipboardMonitor, "Monitor should be nil by default")

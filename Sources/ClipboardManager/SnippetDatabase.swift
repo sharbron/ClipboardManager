@@ -23,25 +23,27 @@ struct Snippet: Identifiable, Hashable {
 
 /// Thread-safe database actor for managing snippets
 actor SnippetDatabase {
-    nonisolated(unsafe) private var db: Connection?
-    nonisolated(unsafe) private let snippets = Table("snippets")
+    private var db: Connection?
+    private let snippets = Table("snippets")
 
-    nonisolated(unsafe) private let id = Expression<Int64>("id")
-    nonisolated(unsafe) private let trigger = Expression<String>("trigger")
-    nonisolated(unsafe) private let content = Expression<String>("content")
-    nonisolated(unsafe) private let description = Expression<String>("description")
-    nonisolated(unsafe) private let createdAt = Expression<String>("created_at")
-    nonisolated(unsafe) private let usageCount = Expression<Int>("usage_count")
+    private let id = Expression<Int64>("id")
+    private let trigger = Expression<String>("trigger")
+    private let content = Expression<String>("content")
+    private let description = Expression<String>("description")
+    private let createdAt = Expression<String>("created_at")
+    private let usageCount = Expression<Int>("usage_count")
 
-    nonisolated(unsafe) private(set) var isInitialized = false
+    private var isInitialized = false
 
     // Reuse ISO8601DateFormatter for better performance
     private let isoFormatter = ISO8601DateFormatter()
 
     init(databasePath: String? = nil) {
+        // Initialize all properties first before any method calls to satisfy Swift 6 concurrency
         do {
             let path = databasePath ?? (NSHomeDirectory() + "/.clipboard_snippets.db")
-            db = try Connection(path)
+            let connection = try Connection(path)
+            db = connection
 
             // Set restrictive file permissions (owner read/write only)
             try FileManager.default.setAttributes(
@@ -49,7 +51,19 @@ actor SnippetDatabase {
                 ofItemAtPath: path
             )
 
-            try initializeDatabase()
+            // Initialize database schema inline
+            try connection.run(snippets.create(ifNotExists: true) { table in
+                table.column(id, primaryKey: .autoincrement)
+                table.column(trigger, unique: true)
+                table.column(content)
+                table.column(description)
+                table.column(createdAt)
+                table.column(usageCount, defaultValue: 0)
+            })
+
+            // Create index for faster trigger lookups
+            try connection.run(snippets.createIndex(trigger, ifNotExists: true))
+
             isInitialized = true
         } catch {
             print("Failed to initialize snippet database: \(error)")
@@ -57,7 +71,7 @@ actor SnippetDatabase {
         }
     }
 
-    nonisolated private func initializeDatabase() throws {
+    private func initializeDatabase() throws {
         try db?.run(snippets.create(ifNotExists: true) { table in
             table.column(id, primaryKey: .autoincrement)
             table.column(trigger, unique: true)
