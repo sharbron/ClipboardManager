@@ -287,10 +287,10 @@ struct AddSnippetView: View {
             return
         }
 
+        isPresented = false
         Task {
             await appState.saveSnippet(trigger: trigger, content: content, description: description)
         }
-        isPresented = false
     }
 }
 
@@ -347,10 +347,10 @@ struct EditSnippetView: View {
                 Spacer()
 
                 Button("Save") {
+                    isPresented = false
                     Task {
                         await appState.saveSnippet(trigger: trigger, content: content, description: description)
                     }
-                    isPresented = false
                 }
                 .keyboardShortcut(.return)
                 .disabled(description.isEmpty || content.isEmpty)
