@@ -3,6 +3,7 @@ import SQLite
 import CryptoKit
 import Vision
 import AppKit
+import os.log
 
 struct ClipboardEntry: Hashable {
     let id: Int64
@@ -69,8 +70,10 @@ actor ClipboardDatabase {
 
     init() {
         // Initialize all properties first before any method calls to satisfy Swift 6 concurrency
+        NSLog("DEBUG: ClipboardDatabase init starting")
         do {
             let path = NSHomeDirectory() + "/.clipboard_history.db"
+            NSLog("DEBUG: Database path: %@", path)
             let connection = try Connection(path)
             db = connection
 
@@ -157,6 +160,7 @@ actor ClipboardDatabase {
 
             // Populate FTS index inline
             let count = try connection.scalar(localClipsFTS.count)
+            NSLog("DEBUG: FTS count = %d", count)
             if count == 0 {
                 // Get all clips and populate FTS
                 let allClips = try connection.prepare(localClips)
@@ -222,7 +226,7 @@ actor ClipboardDatabase {
                 }
             } else if encryptionKey == nil {
                 // FTS already populated but we still need encryption key
-                print("DEBUG: Loading encryption key (FTS already populated)")
+                NSLog("DEBUG: Loading encryption key (FTS already populated)")
                 let service = "clipboard_manager_swift"
                 let account = "encryption_key"
 
@@ -238,9 +242,9 @@ actor ClipboardDatabase {
 
                 if status == errSecSuccess, let keyData = result as? Data {
                     encryptionKey = SymmetricKey(data: keyData)
-                    print("DEBUG: Loaded existing encryption key from keychain")
+                    NSLog("DEBUG: Loaded existing encryption key from keychain")
                 } else {
-                    print("DEBUG: Creating new encryption key (keychain status: \(status))")
+                    NSLog("DEBUG: Creating new encryption key (keychain status: %d)", status)
                     let newKey = SymmetricKey(size: .bits256)
                     let keyData = newKey.withUnsafeBytes { Data($0) }
 
@@ -254,13 +258,13 @@ actor ClipboardDatabase {
 
                     let addStatus = SecItemAdd(addQuery as CFDictionary, nil)
                     if addStatus != errSecSuccess {
-                        print("ERROR: Failed to add encryption key to keychain (status: \(addStatus))")
+                        NSLog("ERROR: Failed to add encryption key to keychain (status: %d)", addStatus)
                     }
                     encryptionKey = newKey
                 }
             }
 
-            print("DEBUG: Database initialized. encryptionKey is \(encryptionKey == nil ? "nil" : "set")")
+            NSLog("DEBUG: Database initialized. encryptionKey is %@", encryptionKey == nil ? "nil" : "set")
 
             isInitialized = true
         } catch {
@@ -452,7 +456,7 @@ actor ClipboardDatabase {
 
     func saveClip(_ text: String, type: String = "text", image: Data? = nil, rtfData: Data? = nil, sourceApp: String? = nil) async {
         guard let encryptedContent = encrypt(text) else {
-            print("ERROR: Failed to encrypt content - encryptionKey is nil")
+            NSLog("ERROR: Failed to encrypt content - encryptionKey is nil")
             return
         }
 
@@ -490,7 +494,7 @@ actor ClipboardDatabase {
                 ))
             }
         } catch {
-            print("ERROR: Failed to save clip to database: \(error)")
+            NSLog("ERROR: Failed to save clip to database: %@", error.localizedDescription)
         }
     }
 
