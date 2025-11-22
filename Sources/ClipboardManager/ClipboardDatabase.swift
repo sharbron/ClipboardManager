@@ -162,50 +162,48 @@ actor ClipboardDatabase {
             let count = try connection.scalar(localClipsFTS.count)
             NSLog("DEBUG: FTS count = %d", count)
             if count == 0 {
-                // Get all clips and populate FTS
-                let allClips = try connection.prepare(localClips)
-                for row in allClips {
-                    // Inline decryption - get or create key first
-                    let service = "clipboard_manager_swift"
-                    let account = "encryption_key"
+                // Load or create encryption key FIRST (before populating FTS)
+                let service = "clipboard_manager_swift"
+                let account = "encryption_key"
 
-                    let query: [String: Any] = [
+                let query: [String: Any] = [
+                    kSecClass as String: kSecClassGenericPassword,
+                    kSecAttrService as String: service,
+                    kSecAttrAccount as String: account,
+                    kSecReturnData as String: true
+                ]
+
+                var result: AnyObject?
+                let status = SecItemCopyMatching(query as CFDictionary, &result)
+
+                if status == errSecSuccess, let keyData = result as? Data {
+                    encryptionKey = SymmetricKey(data: keyData)
+                    NSLog("DEBUG: Loaded existing encryption key from keychain")
+                } else {
+                    // Create new key
+                    NSLog("DEBUG: Creating new encryption key (keychain status: %d)", status)
+                    let newKey = SymmetricKey(size: .bits256)
+                    let keyData = newKey.withUnsafeBytes { Data($0) }
+
+                    let addQuery: [String: Any] = [
                         kSecClass as String: kSecClassGenericPassword,
                         kSecAttrService as String: service,
                         kSecAttrAccount as String: account,
-                        kSecReturnData as String: true
+                        kSecValueData as String: keyData,
+                        kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock
                     ]
 
-                    var result: AnyObject?
-                    let status = SecItemCopyMatching(query as CFDictionary, &result)
-
-                    let key: SymmetricKey
-                    if status == errSecSuccess, let keyData = result as? Data {
-                        key = SymmetricKey(data: keyData)
-                    } else {
-                        // Create new key
-                        let newKey = SymmetricKey(size: .bits256)
-                        let keyData = newKey.withUnsafeBytes { Data($0) }
-
-                        let addQuery: [String: Any] = [
-                            kSecClass as String: kSecClassGenericPassword,
-                            kSecAttrService as String: service,
-                            kSecAttrAccount as String: account,
-                            kSecValueData as String: keyData,
-                            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock
-                        ]
-
-                        let addStatus = SecItemAdd(addQuery as CFDictionary, nil)
-                        if addStatus != errSecSuccess {
-                            print("Error: Failed to save encryption key to keychain (status: \(addStatus))")
-                        }
-                        key = newKey
+                    let addStatus = SecItemAdd(addQuery as CFDictionary, nil)
+                    if addStatus != errSecSuccess {
+                        NSLog("ERROR: Failed to save encryption key to keychain (status: %d)", addStatus)
                     }
+                    encryptionKey = newKey
+                }
 
-                    // Set encryption key property
-                    encryptionKey = key
-
-                    // Now decrypt and populate FTS
+                // Now populate FTS if there are clips
+                let allClips = try connection.prepare(localClips)
+                for row in allClips {
+                    // Decrypt and populate FTS
                     if let encKey = encryptionKey {
                         let encryptedText = row[localContent]
                         if let data = Data(base64Encoded: encryptedText) {
