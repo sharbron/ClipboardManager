@@ -72,14 +72,17 @@ class AppState: ObservableObject {
         try? await Task.sleep(nanoseconds: 100_000_000)
         clipboardMonitor?.resumeMonitoring()
 
-        // Show notification if enabled
-        let enableNotifications = UserDefaults.standard.bool(forKey: "enableNotifications")
-        if enableNotifications || !UserDefaults.standard.dictionaryRepresentation().keys.contains("enableNotifications") {
-            let notification = UNMutableNotificationContent()
-            notification.title = "Copied"
-            notification.body = "Clip copied to clipboard"
-            let request = UNNotificationRequest(identifier: UUID().uuidString, content: notification, trigger: nil)
-            try? await UNUserNotificationCenter.current().add(request)
+        // Show notification if enabled (skip in test environment)
+        let isRunningTests = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+        if !isRunningTests {
+            let enableNotifications = UserDefaults.standard.bool(forKey: "enableNotifications")
+            if enableNotifications || !UserDefaults.standard.dictionaryRepresentation().keys.contains("enableNotifications") {
+                let notification = UNMutableNotificationContent()
+                notification.title = "Copied"
+                notification.body = "Clip copied to clipboard"
+                let request = UNNotificationRequest(identifier: UUID().uuidString, content: notification, trigger: nil)
+                try? await UNUserNotificationCenter.current().add(request)
+            }
         }
     }
 
@@ -122,14 +125,17 @@ class AppState: ObservableObject {
         // Increment usage count
         await snippetDatabase.incrementUsageCount(trigger: snippet.trigger)
 
-        // Show notification
-        let enableNotifications = UserDefaults.standard.bool(forKey: "enableNotifications")
-        if enableNotifications || !UserDefaults.standard.dictionaryRepresentation().keys.contains("enableNotifications") {
-            let notification = UNMutableNotificationContent()
-            notification.title = "Snippet Expanded"
-            notification.body = "'\(snippet.trigger)' copied to clipboard"
-            let request = UNNotificationRequest(identifier: UUID().uuidString, content: notification, trigger: nil)
-            try? await UNUserNotificationCenter.current().add(request)
+        // Show notification (skip in test environment)
+        let isRunningTests = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+        if !isRunningTests {
+            let enableNotifications = UserDefaults.standard.bool(forKey: "enableNotifications")
+            if enableNotifications || !UserDefaults.standard.dictionaryRepresentation().keys.contains("enableNotifications") {
+                let notification = UNMutableNotificationContent()
+                notification.title = "Snippet Expanded"
+                notification.body = "'\(snippet.trigger)' copied to clipboard"
+                let request = UNNotificationRequest(identifier: UUID().uuidString, content: notification, trigger: nil)
+                try? await UNUserNotificationCenter.current().add(request)
+            }
         }
     }
 
