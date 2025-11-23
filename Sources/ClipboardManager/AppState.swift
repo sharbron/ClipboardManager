@@ -73,7 +73,7 @@ class AppState: ObservableObject {
         clipboardMonitor?.resumeMonitoring()
 
         // Show notification if enabled (skip in test environment)
-        let isRunningTests = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+        let isRunningTests = NSClassFromString("XCTestCase") != nil
         if !isRunningTests {
             let enableNotifications = UserDefaults.standard.bool(forKey: "enableNotifications")
             if enableNotifications || !UserDefaults.standard.dictionaryRepresentation().keys.contains("enableNotifications") {
@@ -126,7 +126,7 @@ class AppState: ObservableObject {
         await snippetDatabase.incrementUsageCount(trigger: snippet.trigger)
 
         // Show notification (skip in test environment)
-        let isRunningTests = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+        let isRunningTests = NSClassFromString("XCTestCase") != nil
         if !isRunningTests {
             let enableNotifications = UserDefaults.standard.bool(forKey: "enableNotifications")
             if enableNotifications || !UserDefaults.standard.dictionaryRepresentation().keys.contains("enableNotifications") {
