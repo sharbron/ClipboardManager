@@ -23,17 +23,17 @@ struct Snippet: Identifiable, Hashable {
 
 /// Thread-safe database actor for managing snippets
 actor SnippetDatabase {
-    private var db: Connection?
-    private let snippets = Table("snippets")
+    nonisolated(unsafe) private var db: Connection?
+    nonisolated(unsafe) private let snippets = Table("snippets")
 
-    private let id = Expression<Int64>("id")
-    private let trigger = Expression<String>("trigger")
-    private let content = Expression<String>("content")
-    private let description = Expression<String>("description")
-    private let createdAt = Expression<String>("created_at")
-    private let usageCount = Expression<Int>("usage_count")
+    nonisolated(unsafe) private let id = Expression<Int64>("id")
+    nonisolated(unsafe) private let trigger = Expression<String>("trigger")
+    nonisolated(unsafe) private let content = Expression<String>("content")
+    nonisolated(unsafe) private let description = Expression<String>("description")
+    nonisolated(unsafe) private let createdAt = Expression<String>("created_at")
+    nonisolated(unsafe) private let usageCount = Expression<Int>("usage_count")
 
-    private var isInitialized = false
+    nonisolated(unsafe) private var isInitialized = false
 
     // Reuse ISO8601DateFormatter for better performance
     private let isoFormatter = ISO8601DateFormatter()
