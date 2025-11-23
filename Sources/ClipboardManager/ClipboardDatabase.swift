@@ -163,42 +163,7 @@ actor ClipboardDatabase {
             NSLog("DEBUG: FTS count = %d", count)
             if count == 0 {
                 // Load or create encryption key FIRST (before populating FTS)
-                let service = "clipboard_manager_swift"
-                let account = "encryption_key"
-
-                let query: [String: Any] = [
-                    kSecClass as String: kSecClassGenericPassword,
-                    kSecAttrService as String: service,
-                    kSecAttrAccount as String: account,
-                    kSecReturnData as String: true
-                ]
-
-                var result: AnyObject?
-                let status = SecItemCopyMatching(query as CFDictionary, &result)
-
-                if status == errSecSuccess, let keyData = result as? Data {
-                    encryptionKey = SymmetricKey(data: keyData)
-                    NSLog("DEBUG: Loaded existing encryption key from keychain")
-                } else {
-                    // Create new key
-                    NSLog("DEBUG: Creating new encryption key (keychain status: %d)", status)
-                    let newKey = SymmetricKey(size: .bits256)
-                    let keyData = newKey.withUnsafeBytes { Data($0) }
-
-                    let addQuery: [String: Any] = [
-                        kSecClass as String: kSecClassGenericPassword,
-                        kSecAttrService as String: service,
-                        kSecAttrAccount as String: account,
-                        kSecValueData as String: keyData,
-                        kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock
-                    ]
-
-                    let addStatus = SecItemAdd(addQuery as CFDictionary, nil)
-                    if addStatus != errSecSuccess {
-                        NSLog("ERROR: Failed to save encryption key to keychain (status: %d)", addStatus)
-                    }
-                    encryptionKey = newKey
-                }
+                loadOrCreateEncryptionKey()
 
                 // Now populate FTS if there are clips
                 let allClips = try connection.prepare(localClips)
@@ -225,41 +190,7 @@ actor ClipboardDatabase {
             } else if encryptionKey == nil {
                 // FTS already populated but we still need encryption key
                 NSLog("DEBUG: Loading encryption key (FTS already populated)")
-                let service = "clipboard_manager_swift"
-                let account = "encryption_key"
-
-                let query: [String: Any] = [
-                    kSecClass as String: kSecClassGenericPassword,
-                    kSecAttrService as String: service,
-                    kSecAttrAccount as String: account,
-                    kSecReturnData as String: true
-                ]
-
-                var result: AnyObject?
-                let status = SecItemCopyMatching(query as CFDictionary, &result)
-
-                if status == errSecSuccess, let keyData = result as? Data {
-                    encryptionKey = SymmetricKey(data: keyData)
-                    NSLog("DEBUG: Loaded existing encryption key from keychain")
-                } else {
-                    NSLog("DEBUG: Creating new encryption key (keychain status: %d)", status)
-                    let newKey = SymmetricKey(size: .bits256)
-                    let keyData = newKey.withUnsafeBytes { Data($0) }
-
-                    let addQuery: [String: Any] = [
-                        kSecClass as String: kSecClassGenericPassword,
-                        kSecAttrService as String: service,
-                        kSecAttrAccount as String: account,
-                        kSecValueData as String: keyData,
-                        kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock
-                    ]
-
-                    let addStatus = SecItemAdd(addQuery as CFDictionary, nil)
-                    if addStatus != errSecSuccess {
-                        NSLog("ERROR: Failed to add encryption key to keychain (status: %d)", addStatus)
-                    }
-                    encryptionKey = newKey
-                }
+                loadOrCreateEncryptionKey()
             }
 
             NSLog("DEBUG: Database initialized. encryptionKey is %@", encryptionKey == nil ? "nil" : "set")
@@ -416,6 +347,44 @@ actor ClipboardDatabase {
             // Decryption can fail for corrupted data or wrong key
             // Don't log the error as it could expose sensitive info
             return nil
+        }
+    }
+
+    private func loadOrCreateEncryptionKey() {
+        let service = "clipboard_manager_swift"
+        let account = "encryption_key"
+
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account,
+            kSecReturnData as String: true
+        ]
+
+        var result: AnyObject?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+
+        if status == errSecSuccess, let keyData = result as? Data {
+            encryptionKey = SymmetricKey(data: keyData)
+            NSLog("DEBUG: Loaded existing encryption key from keychain")
+        } else {
+            NSLog("DEBUG: Creating new encryption key (keychain status: %d)", status)
+            let newKey = SymmetricKey(size: .bits256)
+            let keyData = newKey.withUnsafeBytes { Data($0) }
+
+            let addQuery: [String: Any] = [
+                kSecClass as String: kSecClassGenericPassword,
+                kSecAttrService as String: service,
+                kSecAttrAccount as String: account,
+                kSecValueData as String: keyData,
+                kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock
+            ]
+
+            let addStatus = SecItemAdd(addQuery as CFDictionary, nil)
+            if addStatus != errSecSuccess {
+                NSLog("ERROR: Failed to add encryption key to keychain (status: %d)", addStatus)
+            }
+            encryptionKey = newKey
         }
     }
 
