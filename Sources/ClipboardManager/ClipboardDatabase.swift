@@ -39,30 +39,30 @@ struct ClipboardEntry: Hashable {
 
 /// Thread-safe database actor using Swift Concurrency
 actor ClipboardDatabase {
-    private var db: Connection?
-    private let clips = Table("clips")
-    private let clipsFTS = VirtualTable("clips_fts")  // Full-text search table
+    nonisolated(unsafe) private var db: Connection?
+    nonisolated(unsafe) private let clips = Table("clips")
+    nonisolated(unsafe) private let clipsFTS = VirtualTable("clips_fts")  // Full-text search table
 
-    private let id = Expression<Int64>("id")
-    private let timestamp = Expression<String>("timestamp")
-    private let contentType = Expression<String>("content_type")
-    private let content = Expression<String>("content")
-    private let imageData = Expression<Data?>("image_data")
-    private let isPinned = Expression<Bool>("is_pinned")
-    private let sourceApp = Expression<String?>("source_app")
-    private let extractedText = Expression<String?>("extracted_text")
+    nonisolated(unsafe) private let id = Expression<Int64>("id")
+    nonisolated(unsafe) private let timestamp = Expression<String>("timestamp")
+    nonisolated(unsafe) private let contentType = Expression<String>("content_type")
+    nonisolated(unsafe) private let content = Expression<String>("content")
+    nonisolated(unsafe) private let imageData = Expression<Data?>("image_data")
+    nonisolated(unsafe) private let isPinned = Expression<Bool>("is_pinned")
+    nonisolated(unsafe) private let sourceApp = Expression<String?>("source_app")
+    nonisolated(unsafe) private let extractedText = Expression<String?>("extracted_text")
 
     // FTS columns
-    private let rowid = Expression<Int64>("rowid")
-    private let ftsContent = Expression<String>("content")
+    nonisolated(unsafe) private let rowid = Expression<Int64>("rowid")
+    nonisolated(unsafe) private let ftsContent = Expression<String>("content")
 
     // Encryption key and connection are set once during init and never modified
-    // Using because SQLite.swift doesn't support Sendable
+    // Using nonisolated(unsafe) because SQLite.swift doesn't support Sendable
     // Safe because: init runs single-threaded, then all access is serialized by actor
-    private var encryptionKey: SymmetricKey?
+    nonisolated(unsafe) private var encryptionKey: SymmetricKey?
 
     // isInitialized is written only in init, then read-only - safe for nonisolated(unsafe)
-    private var isInitialized = false
+    nonisolated(unsafe) private var isInitialized = false
 
     // Reuse ISO8601DateFormatter for better performance
     private let isoFormatter = ISO8601DateFormatter()
