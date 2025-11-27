@@ -392,6 +392,7 @@ final class AppStateTests: XCTestCase {
 
     // MARK: - Performance Tests
 
+    @MainActor
     func testLoadClipsWithManyEntries() async throws {
         // Seed database with many clips to test performance
         for i in 1...100 {

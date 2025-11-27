@@ -33,7 +33,7 @@ actor SnippetDatabase {
     nonisolated(unsafe) private let createdAt = Expression<String>("created_at")
     nonisolated(unsafe) private let usageCount = Expression<Int>("usage_count")
 
-    nonisolated(unsafe) private var isInitialized = false
+    nonisolated(unsafe) var isInitialized = false
 
     // Reuse ISO8601DateFormatter for better performance
     private let isoFormatter = ISO8601DateFormatter()

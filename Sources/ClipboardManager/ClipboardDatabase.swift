@@ -35,6 +35,16 @@ struct ClipboardEntry: Hashable {
         }
         return preview
     }
+
+    // Entries are considered equal and have the same hash if they have the same ID
+    // (they represent the same database entity even if content changed)
+    func hash(into hasher: inout Hasher) {
+        hasher.combine(id)
+    }
+
+    static func == (lhs: ClipboardEntry, rhs: ClipboardEntry) -> Bool {
+        lhs.id == rhs.id
+    }
 }
 
 /// Thread-safe database actor using Swift Concurrency
@@ -62,7 +72,7 @@ actor ClipboardDatabase {
     nonisolated(unsafe) private var encryptionKey: SymmetricKey?
 
     // isInitialized is written only in init, then read-only - safe for nonisolated(unsafe)
-    nonisolated(unsafe) private var isInitialized = false
+    nonisolated(unsafe) var isInitialized = false
 
     // Reuse ISO8601DateFormatter for better performance
     private let isoFormatter = ISO8601DateFormatter()
@@ -190,8 +200,8 @@ actor ClipboardDatabase {
                     encryptionKey = key
 
                     // Now decrypt and populate FTS
+                    let encryptedText = row[content]
                     if let encKey = encryptionKey,
-                       let encryptedText = row[content] as? String,
                        let data = Data(base64Encoded: encryptedText) {
                         do {
                             let sealedBox = try AES.GCM.SealedBox(combined: data)
@@ -559,10 +569,9 @@ actor ClipboardDatabase {
             let results = try db.prepare(ftsQuery)
 
             var clipIds: [Int64] = []
-            for row in statement {
-                if let docid = row[0] as? Int64 {
-                    clipIds.append(docid)
-                }
+            for row in results {
+                let docid = row[rowid]
+                clipIds.append(docid)
             }
 
             // Fetch full clip details for matching IDs
