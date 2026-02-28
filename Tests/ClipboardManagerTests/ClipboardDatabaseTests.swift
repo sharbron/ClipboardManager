@@ -12,21 +12,18 @@ final class ClipboardDatabaseTests: XCTestCase {
     override func setUp() async throws {
         try await super.setUp()
 
-        // Create a temporary database file for testing
+        // Create a temporary database file for testing - isolated from production
         let tempDir = FileManager.default.temporaryDirectory
         testDatabasePath = tempDir.appendingPathComponent("test_clipboard_\(UUID().uuidString).db").path
 
-        // Initialize database
-        database = ClipboardDatabase()
+        // Initialize database with test path
+        database = ClipboardDatabase(path: testDatabasePath)
 
         // Wait a bit to ensure database is initialized
         try await Task.sleep(nanoseconds: 100_000_000)
 
         // Verify database is initialized
         XCTAssertTrue(database.isInitialized, "Database should be initialized")
-
-        // Clear any existing data for test isolation
-        _ = await database.clearAllHistory(keepPinned: false)
     }
 
     override func tearDown() async throws {

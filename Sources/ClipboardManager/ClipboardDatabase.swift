@@ -77,179 +77,28 @@ actor ClipboardDatabase {
     // Reuse ISO8601DateFormatter for better performance
     private let isoFormatter = ISO8601DateFormatter()
 
-    init() {
+    // Path used by this database instance (for cleanup in tests)
+    nonisolated(unsafe) private(set) var databasePath: String = ""
+
+    init(path: String? = nil) {
         // Initialize all properties first before any method calls to satisfy Swift 6 concurrency
         do {
-            let path = NSHomeDirectory() + "/.clipboard_history.db"
-            let connection = try Connection(path)
+            let dbPath = path ?? NSHomeDirectory() + "/.clipboard_history.db"
+            databasePath = dbPath
+            let connection = try Connection(dbPath)
             db = connection
 
             // Set restrictive file permissions (owner read/write only)
-            // This prevents other users from reading the encrypted database
             try FileManager.default.setAttributes(
                 [.posixPermissions: 0o600],
-                ofItemAtPath: path
+                ofItemAtPath: dbPath
             )
 
-            // Initialize database schema inline
-            try connection.run(clips.create(ifNotExists: true) { table in
-                table.column(id, primaryKey: .autoincrement)
-                table.column(timestamp)
-                table.column(contentType)
-                table.column(content)
-                table.column(imageData)
-                table.column(isPinned, defaultValue: false)
-            })
+            // Initialize database schema
+            try initializeSchema(connection)
 
-            // Create indexes for faster searches and filtering
-            try connection.run(clips.createIndex(timestamp, ifNotExists: true))
-            try connection.run(clips.createIndex(isPinned, ifNotExists: true))
-            try connection.run(clips.createIndex(contentType, ifNotExists: true))
-
-            // Create FTS4 virtual table for full-text search
-            try connection.run(clipsFTS.create(.FTS4([ftsContent]), ifNotExists: true))
-
-            // Migrate database inline
-            let tableInfo = try connection.prepare("PRAGMA table_info(clips)")
-            var hasImageDataColumn = false
-            var hasPinnedColumn = false
-            var hasSourceAppColumn = false
-            var hasExtractedTextColumn = false
-
-            for row in tableInfo {
-                if let columnName = row[1] as? String {
-                    if columnName == "image_data" {
-                        hasImageDataColumn = true
-                    }
-                    if columnName == "is_pinned" {
-                        hasPinnedColumn = true
-                    }
-                    if columnName == "source_app" {
-                        hasSourceAppColumn = true
-                    }
-                    if columnName == "extracted_text" {
-                        hasExtractedTextColumn = true
-                    }
-                }
-            }
-
-            if !hasImageDataColumn {
-                try connection.run("ALTER TABLE clips ADD COLUMN image_data BLOB")
-                print("Database migrated: added image_data column")
-            }
-
-            if !hasPinnedColumn {
-                try connection.run("ALTER TABLE clips ADD COLUMN is_pinned INTEGER DEFAULT 0")
-                print("Database migrated: added is_pinned column")
-            }
-
-            if !hasSourceAppColumn {
-                try connection.run("ALTER TABLE clips ADD COLUMN source_app TEXT")
-                print("Database migrated: added source_app column")
-            }
-
-            if !hasExtractedTextColumn {
-                try connection.run("ALTER TABLE clips ADD COLUMN extracted_text TEXT")
-                print("Database migrated: added extracted_text column")
-            }
-
-            // Populate FTS index inline
-            let count = try connection.scalar(clipsFTS.count)
-            if count == 0 {
-                // Get all clips and populate FTS
-                let allClips = try connection.prepare(clips)
-                for row in allClips {
-                    // Inline decryption - get or create key first
-                    let service = "clipboard_manager_swift"
-                    let account = "encryption_key"
-
-                    let query: [String: Any] = [
-                        kSecClass as String: kSecClassGenericPassword,
-                        kSecAttrService as String: service,
-                        kSecAttrAccount as String: account,
-                        kSecReturnData as String: true
-                    ]
-
-                    var result: AnyObject?
-                    let status = SecItemCopyMatching(query as CFDictionary, &result)
-
-                    let key: SymmetricKey
-                    if status == errSecSuccess, let keyData = result as? Data {
-                        key = SymmetricKey(data: keyData)
-                    } else {
-                        // Create new key
-                        let newKey = SymmetricKey(size: .bits256)
-                        let keyData = newKey.withUnsafeBytes { Data($0) }
-
-                        let addQuery: [String: Any] = [
-                            kSecClass as String: kSecClassGenericPassword,
-                            kSecAttrService as String: service,
-                            kSecAttrAccount as String: account,
-                            kSecValueData as String: keyData,
-                            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock
-                        ]
-
-                        let addStatus = SecItemAdd(addQuery as CFDictionary, nil)
-                        if addStatus != errSecSuccess {
-                            print("Error: Failed to save encryption key to keychain (status: \(addStatus))")
-                        }
-                        key = newKey
-                    }
-
-                    // Set encryption key property
-                    encryptionKey = key
-
-                    // Now decrypt and populate FTS
-                    let encryptedText = row[content]
-                    if let encKey = encryptionKey,
-                       let data = Data(base64Encoded: encryptedText) {
-                        do {
-                            let sealedBox = try AES.GCM.SealedBox(combined: data)
-                            let decryptedData = try AES.GCM.open(sealedBox, using: encKey)
-                            if let decryptedContent = String(data: decryptedData, encoding: .utf8) {
-                                try connection.run(clipsFTS.insert(
-                                    rowid <- row[id],
-                                    ftsContent <- decryptedContent
-                                ))
-                            }
-                        } catch {
-                            // Skip this entry if decryption fails
-                        }
-                    }
-                }
-            } else if encryptionKey == nil {
-                // FTS already populated but we still need encryption key
-                let service = "clipboard_manager_swift"
-                let account = "encryption_key"
-
-                let query: [String: Any] = [
-                    kSecClass as String: kSecClassGenericPassword,
-                    kSecAttrService as String: service,
-                    kSecAttrAccount as String: account,
-                    kSecReturnData as String: true
-                ]
-
-                var result: AnyObject?
-                let status = SecItemCopyMatching(query as CFDictionary, &result)
-
-                if status == errSecSuccess, let keyData = result as? Data {
-                    encryptionKey = SymmetricKey(data: keyData)
-                } else {
-                    let newKey = SymmetricKey(size: .bits256)
-                    let keyData = newKey.withUnsafeBytes { Data($0) }
-
-                    let addQuery: [String: Any] = [
-                        kSecClass as String: kSecClassGenericPassword,
-                        kSecAttrService as String: service,
-                        kSecAttrAccount as String: account,
-                        kSecValueData as String: keyData,
-                        kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock
-                    ]
-
-                    _ = SecItemAdd(addQuery as CFDictionary, nil)
-                    encryptionKey = newKey
-                }
-            }
+            // Migrate and populate FTS
+            try migrateAndPopulateFTS(connection)
 
             isInitialized = true
         } catch {
@@ -258,8 +107,8 @@ actor ClipboardDatabase {
         }
     }
 
-    private func initializeDatabase() throws {
-        try db?.run(clips.create(ifNotExists: true) { table in
+    private nonisolated func initializeSchema(_ connection: Connection) throws {
+        try connection.run(clips.create(ifNotExists: true) { table in
             table.column(id, primaryKey: .autoincrement)
             table.column(timestamp)
             table.column(contentType)
@@ -268,79 +117,62 @@ actor ClipboardDatabase {
             table.column(isPinned, defaultValue: false)
         })
 
-        // Create indexes for faster searches and filtering
-        try db?.run(clips.createIndex(timestamp, ifNotExists: true))
-        try db?.run(clips.createIndex(isPinned, ifNotExists: true))
-        try db?.run(clips.createIndex(contentType, ifNotExists: true))
+        try connection.run(clips.createIndex(timestamp, ifNotExists: true))
+        try connection.run(clips.createIndex(isPinned, ifNotExists: true))
+        try connection.run(clips.createIndex(contentType, ifNotExists: true))
 
-        // Create FTS4 virtual table for full-text search
-        // FTS4 provides fast full-text search capabilities
-        try db?.run(clipsFTS.create(.FTS4([ftsContent]), ifNotExists: true))
-
-        // Migrate existing database to add new columns if they don't exist
-        try migrateDatabase()
-
-        // Populate FTS table with existing data (run only once or when needed)
-        try populateFTSIndex()
+        try connection.run(clipsFTS.create(.FTS4([ftsContent]), ifNotExists: true))
     }
 
-    private func migrateDatabase() throws {
-        guard let db = db else { return }
+    private nonisolated func migrateAndPopulateFTS(_ connection: Connection) throws {
+        // Migrate database
+        let tableInfo = try connection.prepare("PRAGMA table_info(clips)")
+        var columns = Set<String>()
 
-        // Check existing columns
-        let tableInfo = try db.prepare("PRAGMA table_info(clips)")
-        var hasImageDataColumn = false
-        var hasPinnedColumn = false
-        var hasSourceAppColumn = false
-        var hasExtractedTextColumn = false
-
-        for row in tableInfo {
+        for row in tableInfo where row[1] as? String != nil {
             if let columnName = row[1] as? String {
-                if columnName == "image_data" {
-                    hasImageDataColumn = true
-                }
-                if columnName == "is_pinned" {
-                    hasPinnedColumn = true
-                }
-                if columnName == "source_app" {
-                    hasSourceAppColumn = true
-                }
-                if columnName == "extracted_text" {
-                    hasExtractedTextColumn = true
-                }
+                columns.insert(columnName)
             }
         }
 
-        // Add image_data column if it doesn't exist
-        if !hasImageDataColumn {
-            try db.run("ALTER TABLE clips ADD COLUMN image_data BLOB")
-            print("Database migrated: added image_data column")
+        if !columns.contains("image_data") {
+            try connection.run("ALTER TABLE clips ADD COLUMN image_data BLOB")
+        }
+        if !columns.contains("is_pinned") {
+            try connection.run("ALTER TABLE clips ADD COLUMN is_pinned INTEGER DEFAULT 0")
+        }
+        if !columns.contains("source_app") {
+            try connection.run("ALTER TABLE clips ADD COLUMN source_app TEXT")
+        }
+        if !columns.contains("extracted_text") {
+            try connection.run("ALTER TABLE clips ADD COLUMN extracted_text TEXT")
         }
 
-        // Add is_pinned column if it doesn't exist
-        if !hasPinnedColumn {
-            try db.run("ALTER TABLE clips ADD COLUMN is_pinned INTEGER DEFAULT 0")
-            print("Database migrated: added is_pinned column")
-        }
+        // Initialize encryption key
+        try initializeEncryptionKey()
 
-        // Add source_app column if it doesn't exist
-        if !hasSourceAppColumn {
-            try db.run("ALTER TABLE clips ADD COLUMN source_app TEXT")
-            print("Database migrated: added source_app column")
-        }
-
-        // Add extracted_text column if it doesn't exist
-        if !hasExtractedTextColumn {
-            try db.run("ALTER TABLE clips ADD COLUMN extracted_text TEXT")
-            print("Database migrated: added extracted_text column")
+        // Populate FTS if needed
+        let count = try connection.scalar(clipsFTS.count)
+        if count == 0 {
+            let allClips = try connection.prepare(clips)
+            for row in allClips {
+                let encryptedText = row[content]
+                if let encKey = encryptionKey,
+                   let data = Data(base64Encoded: encryptedText),
+                   let decrypted = decryptForMigration(data, using: encKey) {
+                    try connection.run(clipsFTS.insert(
+                        rowid <- row[id],
+                        ftsContent <- decrypted
+                    ))
+                }
+            }
         }
     }
 
-    private func getOrCreateEncryptionKey() throws -> SymmetricKey {
-        let service = "clipboard_manager_swift"  // Use different service name to avoid conflict
+    private nonisolated func initializeEncryptionKey() throws {
+        let service = "clipboard_manager_swift"
         let account = "encryption_key"
 
-        // Try to retrieve existing key from Keychain
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -352,29 +184,35 @@ actor ClipboardDatabase {
         let status = SecItemCopyMatching(query as CFDictionary, &result)
 
         if status == errSecSuccess, let keyData = result as? Data {
-            print("Found existing Swift encryption key")
-            return SymmetricKey(data: keyData)
+            encryptionKey = SymmetricKey(data: keyData)
+        } else {
+            let newKey = SymmetricKey(size: .bits256)
+            let keyData = newKey.withUnsafeBytes { Data($0) }
+
+            let addQuery: [String: Any] = [
+                kSecClass as String: kSecClassGenericPassword,
+                kSecAttrService as String: service,
+                kSecAttrAccount as String: account,
+                kSecValueData as String: keyData,
+                kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock
+            ]
+
+            let addStatus = SecItemAdd(addQuery as CFDictionary, nil)
+            if addStatus != errSecSuccess {
+                print("Error: Failed to save encryption key to keychain (status: \(addStatus))")
+            }
+            encryptionKey = newKey
         }
+    }
 
-        // Key doesn't exist, create a new one
-        let newKey = SymmetricKey(size: .bits256)
-        let keyData = newKey.withUnsafeBytes { Data($0) }
-
-        let addQuery: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: account,
-            kSecValueData as String: keyData,
-            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock
-        ]
-
-        let addStatus = SecItemAdd(addQuery as CFDictionary, nil)
-        if addStatus != errSecSuccess {
-            print("Error: Failed to save encryption key to keychain (status: \(addStatus))")
-            // This is critical - without keychain storage, the key is lost on app restart
-            // User should be notified, but we'll still return the key for this session
+    private nonisolated func decryptForMigration(_ data: Data, using key: SymmetricKey) -> String? {
+        do {
+            let sealedBox = try AES.GCM.SealedBox(combined: data)
+            let decryptedData = try AES.GCM.open(sealedBox, using: key)
+            return String(data: decryptedData, encoding: .utf8)
+        } catch {
+            return nil
         }
-        return newKey
     }
 
     private func encrypt(_ text: String) -> String? {
@@ -440,7 +278,10 @@ actor ClipboardDatabase {
     }
 
     func saveClip(_ text: String, type: String = "text", image: Data? = nil, rtfData: Data? = nil, sourceApp: String? = nil) async {
-        guard let encryptedContent = encrypt(text) else { return }
+        guard let encryptedContent = encrypt(text) else {
+            print("Error: Failed to encrypt clip content - clip not saved")
+            return
+        }
 
         // Perform OCR on images if enabled
         var ocrText: String?
@@ -470,13 +311,20 @@ actor ClipboardDatabase {
                 if let extracted = ocrText, !extracted.isEmpty {
                     searchableText += " " + extracted
                 }
-                try db?.run(clipsFTS.insert(
-                    rowid <- clipId,
-                    ftsContent <- searchableText
-                ))
+                do {
+                    try db?.run(clipsFTS.insert(
+                        rowid <- clipId,
+                        ftsContent <- searchableText
+                    ))
+                } catch {
+                    // Log FTS insertion failure but don't fail the entire save
+                    // The clip is saved but won't be searchable via FTS
+                    print("Warning: Failed to add clip to FTS index (clipId: \(clipId)): \(error)")
+                }
             }
         } catch {
-            // Silent failure
+            // Log database save failures for debugging
+            print("Error: Failed to save clip to database: \(error)")
         }
     }
 
@@ -506,7 +354,8 @@ actor ClipboardDatabase {
                 }
             }
         } catch {
-            // Silent failure
+            // Log error but return empty array (graceful degradation)
+            print("Error: Failed to retrieve recent clips: \(error)")
         }
 
         return entries
@@ -523,18 +372,51 @@ actor ClipboardDatabase {
         }
     }
 
+    // Check if the most recent clip matches the given content/data
+    // This is used to prevent duplicate entries
+    func isDuplicate(text: String, type: String, imageBytes: Data? = nil, rtfBytes: Data? = nil) async -> Bool {
+        do {
+            // Get the most recent clip of the same type
+            let query = clips.filter(contentType == type)
+                .order(timestamp.desc)
+                .limit(1)
+            guard let row = try db?.pluck(query) else { return false }
+
+            // Decrypt the stored content
+            guard let storedContent = decrypt(row[content]) else { return false }
+
+            // For images and RTF, compare binary data
+            if type == "image", let newImageData = imageBytes {
+                let storedImageData = row[imageData]
+                return storedImageData == newImageData
+            } else if type == "rtf", let newRtfData = rtfBytes {
+                let storedRtfData = row[imageData] // RTF stored in imageData field
+                return storedRtfData == newRtfData
+            } else {
+                // For text, compare content
+                return storedContent == text
+            }
+        } catch {
+            return false
+        }
+    }
+
     // Removed: inefficient searchClips() method that decrypted all clips
     // Use searchClipsWithFTS() instead for fast full-text search
 
     func togglePin(clipId: Int64) async -> Bool {
         do {
             let clip = clips.filter(id == clipId)
-            guard let row = try db?.pluck(clip) else { return false }
+            guard let row = try db?.pluck(clip) else {
+                print("Warning: Failed to toggle pin - clip not found (id: \(clipId))")
+                return false
+            }
 
             let currentPinned = row[isPinned]
             try db?.run(clip.update(isPinned <- !currentPinned))
             return !currentPinned
         } catch {
+            print("Error: Failed to toggle pin (clipId: \(clipId)): \(error)")
             return false
         }
     }
@@ -550,6 +432,7 @@ actor ClipboardDatabase {
 
             return true
         } catch {
+            print("Error: Failed to delete clip (clipId: \(clipId)): \(error)")
             return false
         }
     }
@@ -577,7 +460,8 @@ actor ClipboardDatabase {
             // Fetch full clip details for matching IDs
             if !clipIds.isEmpty {
                 let matchingClips = clips.filter(clipIds.contains(id))
-                for row in try db.prepare(matchingClips.order(timestamp.desc)) {
+                let query = matchingClips.order(timestamp.desc)
+                for row in try db.prepare(query) {
                     if let decryptedContent = decrypt(row[content]) {
                         let date = isoFormatter.date(from: row[timestamp]) ?? Date()
 
@@ -602,28 +486,6 @@ actor ClipboardDatabase {
         }
 
         return entries
-    }
-
-    // Populate FTS index with existing clips (migration helper)
-    private func populateFTSIndex() throws {
-        guard let db = db else { return }
-
-        // Check if FTS table is empty
-        let count = try db.scalar(clipsFTS.count)
-        if count > 0 {
-            return  // Already populated
-        }
-
-        // Get all clips and populate FTS
-        let allClips = try db.prepare(clips)
-        for row in allClips {
-            if let decryptedContent = decrypt(row[content]) {
-                try db.run(clipsFTS.insert(
-                    rowid <- row[id],
-                    ftsContent <- decryptedContent
-                ))
-            }
-        }
     }
 
     func cleanupOldClips(days: Int) async -> Int {
@@ -701,5 +563,58 @@ actor ClipboardDatabase {
             return "Unknown"
         }
         return "Unknown"
+    }
+
+    /// Recover clips from FTS table that are missing from main clips table
+    /// This can happen if clips were accidentally deleted but FTS index remains
+    func recoverFromFTS() async -> Int {
+        guard let db = db else { return 0 }
+
+        var recovered = 0
+        do {
+            // Find all FTS entries that don't have corresponding clips
+            let query = """
+                SELECT rowid, content FROM clips_fts
+                WHERE rowid NOT IN (SELECT id FROM clips)
+                ORDER BY rowid
+            """
+
+            let now = isoFormatter.string(from: Date())
+
+            for row in try db.prepare(query) {
+                guard let ftsRowId = row[0] as? Int64,
+                      let textContent = row[1] as? String else { continue }
+
+                // Skip empty content
+                guard !textContent.isEmpty else { continue }
+
+                // Encrypt the content
+                guard let encryptedContent = encrypt(textContent) else { continue }
+
+                // Insert back into clips table with recovered timestamp
+                do {
+                    try db.run(clips.insert(
+                        id <- ftsRowId,
+                        timestamp <- now,
+                        contentType <- "text",
+                        content <- encryptedContent,
+                        imageData <- nil,
+                        isPinned <- false,
+                        sourceApp <- "Recovered",
+                        extractedText <- nil
+                    ))
+                    recovered += 1
+                } catch {
+                    // Skip duplicates or other errors
+                    continue
+                }
+            }
+
+            print("Recovered \(recovered) clips from FTS index")
+        } catch {
+            print("FTS recovery failed: \(error)")
+        }
+
+        return recovered
     }
 }

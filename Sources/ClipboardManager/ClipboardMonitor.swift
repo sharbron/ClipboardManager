@@ -33,14 +33,24 @@ actor ClipboardMonitor {
         self.snippetManager = manager
     }
 
+    /// Pause monitoring immediately (synchronous state change)
+    /// Called from MainActor context before modifying clipboard
     nonisolated func pauseMonitoring() {
-        Task { await setPauseState(true) }
+        Task {
+            await setPauseState(true)
+        }
     }
 
+    /// Resume monitoring after clipboard modification
+    /// Called from MainActor context after clipboard is restored
     nonisolated func resumeMonitoring() {
-        Task { await setPauseState(false) }
+        Task {
+            await setPauseState(false)
+        }
     }
 
+    /// Set the pause state and resynchronize change count if resuming
+    /// Must be called on the actor to avoid race conditions
     private func setPauseState(_ paused: Bool) {
         isRestoringClip = paused
         if !paused {
@@ -58,10 +68,19 @@ actor ClipboardMonitor {
 
         // Start new monitoring task using async/await
         monitoringTask = Task { [weak self] in
-            guard let self = self else { return }
+            guard let self = self else {
+                NSLog("⚠️ ClipboardMonitor: self was deallocated, stopping monitoring task")
+                return
+            }
 
             // Use AsyncStream for periodic checking
             while !Task.isCancelled {
+                // Check if self is still alive
+                guard self as AnyObject? !== nil else {
+                    NSLog("⚠️ ClipboardMonitor: self was deallocated during monitoring loop")
+                    break
+                }
+
                 await self.checkClipboard()
 
                 // Wait 1.5 seconds before next check (reduced CPU usage)
@@ -111,12 +130,20 @@ actor ClipboardMonitor {
             // Save image with a placeholder text
             let imageDescription = "[Image: \(Int(image.size.width))x\(Int(image.size.height))]"
 
-            // Avoid duplicates by checking last entry
-            let recent = await database.getRecentClips(limit: 1)
-            if recent.isEmpty || recent[0].content != imageDescription {
+            // Avoid duplicates by checking if the same image data was recently saved
+            let isDuplicate = await database.isDuplicate(
+                text: imageDescription,
+                type: "image",
+                imageBytes: pngData
+            )
+            if !isDuplicate {
                 await database.saveClip(imageDescription, type: "image", image: pngData, sourceApp: source)
                 lastContent = imageDescription
-                await appState?.loadClips()
+                if let appState = appState {
+                    Task { @MainActor in appState.loadClips() }
+                } else {
+                    NSLog("⚠️ ClipboardMonitor: appState was deallocated, clips not reloaded")
+                }
             }
             return
         }
@@ -135,8 +162,19 @@ actor ClipboardMonitor {
             }
 
             if !plainText.isEmpty && plainText != lastContent {
-                let recent = await database.getRecentClips(limit: 1)
-                if recent.isEmpty || recent[0].content != plainText {
+                // Check for duplicates - for RTF, compare both text and RTF data
+                let isDuplicate: Bool
+                if attributedString.length > 0 && attributedString.containsAttachments == false {
+                    isDuplicate = await database.isDuplicate(
+                        text: plainText,
+                        type: "rtf",
+                        rtfBytes: rtfData
+                    )
+                } else {
+                    isDuplicate = await database.isDuplicate(text: plainText, type: "text")
+                }
+                
+                if !isDuplicate {
                     // Store RTF data separately if it has formatting
                     if attributedString.length > 0 && attributedString.containsAttachments == false {
                         await database.saveClip(plainText, type: "rtf", rtfData: rtfData, sourceApp: source)
@@ -144,28 +182,33 @@ actor ClipboardMonitor {
                         await database.saveClip(plainText, sourceApp: source)
                     }
                     lastContent = plainText
-                    await appState?.loadClips()
+                    if let appState = appState {
+                        Task { @MainActor in appState.loadClips() }
+                    } else {
+                        NSLog("⚠️ ClipboardMonitor: appState was deallocated, clips not reloaded")
+                    }
                 }
                 return
             }
         }
 
         // Get plain text content as fallback
-        guard var content = pasteboard.string(forType: .string),
-              !content.isEmpty,
-              content != lastContent else { return }
+        guard let originalContent = pasteboard.string(forType: .string),
+              !originalContent.isEmpty,
+              originalContent != lastContent else { return }
 
         // Check for snippet expansion
+        var contentToSave = originalContent
         if let snippetManager = snippetManager,
-           let expandedContent = await snippetManager.checkAndExpandSnippet(content: content) {
+           let expandedContent = await snippetManager.checkAndExpandSnippet(content: originalContent) {
             // Snippet matched! Replace clipboard with expanded content
             isRestoringClip = true  // Pause monitoring during expansion
 
             pasteboard.clearContents()
             pasteboard.setString(expandedContent, forType: .string)
 
-            // Update content to the expanded version for saving
-            content = expandedContent
+            // Use expanded content for saving
+            contentToSave = expandedContent
 
             // Brief delay before resuming
             try? await Task.sleep(nanoseconds: 200_000_000)
@@ -174,19 +217,23 @@ actor ClipboardMonitor {
         }
 
         // Check size limit
-        let textSizeBytes = content.utf8.count
+        let textSizeBytes = contentToSave.utf8.count
         if textSizeBytes > maxClipSizeBytes {
             // Skip this clip - too large
             showSizeNotification(type: "Text", actualSize: textSizeBytes, limit: maxClipSizeBytes)
             return
         }
 
-        // Avoid duplicates by checking last entry
-        let recent = await database.getRecentClips(limit: 1)
-        if recent.isEmpty || recent[0].content != content {
-            await database.saveClip(content, sourceApp: source)
-            lastContent = content
-            await appState?.loadClips()
+        // Avoid duplicates by checking if the same content was recently saved
+        let isDuplicate = await database.isDuplicate(text: contentToSave, type: "text")
+        if !isDuplicate {
+            await database.saveClip(contentToSave, sourceApp: source)
+            lastContent = contentToSave
+            if let appState = appState {
+                Task { @MainActor in appState.loadClips() }
+            } else {
+                NSLog("⚠️ ClipboardMonitor: appState was deallocated, clips not reloaded")
+            }
         }
     }
 

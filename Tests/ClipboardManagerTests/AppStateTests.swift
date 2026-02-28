@@ -8,33 +8,42 @@ final class AppStateTests: XCTestCase {
     var snippetDatabase: SnippetDatabase!
     var snippetManager: SnippetManager!
     var appState: AppState!
+    var testDatabasePath: String!
+    var testSnippetDatabasePath: String!
 
     @MainActor
     override func setUp() async throws {
         try await super.setUp()
 
-        // Create database
-        database = ClipboardDatabase()
+        // Create temporary database files for testing - isolated from production
+        let tempDir = FileManager.default.temporaryDirectory
+        testDatabasePath = tempDir.appendingPathComponent("test_clipboard_\(UUID().uuidString).db").path
+        testSnippetDatabasePath = tempDir.appendingPathComponent("test_snippets_\(UUID().uuidString).db").path
+
+        // Create database with test path
+        database = ClipboardDatabase(path: testDatabasePath)
 
         // Wait for database to initialize
         try await Task.sleep(nanoseconds: 100_000_000)
 
-        // Create snippet database and manager
-        snippetDatabase = SnippetDatabase()
+        // Create snippet database and manager with test path
+        snippetDatabase = SnippetDatabase(databasePath: testSnippetDatabasePath)
         try await Task.sleep(nanoseconds: 100_000_000)
         snippetManager = SnippetManager(database: snippetDatabase)
 
         // Create app state with all dependencies
         appState = AppState(database: database, snippetDatabase: snippetDatabase, snippetManager: snippetManager)
-
-        // Clear any existing clips for clean test state
-        _ = await database.clearAllHistory(keepPinned: false)
     }
 
     @MainActor
     override func tearDown() async throws {
-        // Clean up
-        _ = await database.clearAllHistory(keepPinned: false)
+        // Clean up test database files
+        if let path = testDatabasePath {
+            try? FileManager.default.removeItem(atPath: path)
+        }
+        if let path = testSnippetDatabasePath {
+            try? FileManager.default.removeItem(atPath: path)
+        }
 
         try await super.tearDown()
     }

@@ -82,8 +82,25 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
             NSLog("✅ Snippet database initialized")
 
+            // Recover any clips that may have been lost (one-time recovery)
+            let needsRecovery = UserDefaults.standard.bool(forKey: "ftsRecoveryCompleted") == false
+            if needsRecovery {
+                let recovered = await appState.database.recoverFromFTS()
+                if recovered > 0 {
+                    NSLog("🔧 Recovered \(recovered) clip(s) from FTS index")
+                    await MainActor.run {
+                        appState.loadClips()
+                    }
+                }
+                UserDefaults.standard.set(true, forKey: "ftsRecoveryCompleted")
+            }
+
             // Initialize clipboard monitor with snippet manager
-            let monitor = ClipboardMonitor(database: appState.database, appState: appState, snippetManager: appState.snippetManager)
+            let monitor = ClipboardMonitor(
+                database: appState.database,
+                appState: appState,
+                snippetManager: appState.snippetManager
+            )
             clipboardMonitor = monitor
             appState.clipboardMonitor = monitor
             monitor.startMonitoring()
@@ -116,7 +133,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         NSLog("ClipboardManager: Setting up global hotkey (Cmd+Shift+Space)")
 
         if !accessibilityEnabled {
-            NSLog("⚠️ Accessibility permission needed - macOS prompt shown. Please grant permission and restart the app.")
+            let msg = "⚠️ Accessibility permission needed - macOS prompt shown. Please grant permission and restart."
+            NSLog(msg)
         } else {
             NSLog("✅ Accessibility permissions granted - global hotkey enabled")
         }

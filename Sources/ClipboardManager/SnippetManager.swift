@@ -43,14 +43,12 @@ actor SnippetManager {
         }
 
         // Check if content ends with a trigger (for typing expansion)
-        for (trigger, snippet) in cachedSnippets {
-            if trimmedContent.hasSuffix(trigger) {
-                // Increment usage count
-                await database.incrementUsageCount(trigger: trigger)
+        for (trigger, snippet) in cachedSnippets where trimmedContent.hasSuffix(trigger) {
+            // Increment usage count
+            await database.incrementUsageCount(trigger: trigger)
 
-                // Return expanded content
-                return snippet.content
-            }
+            // Return expanded content
+            return snippet.content
         }
 
         return nil

@@ -231,6 +231,13 @@ struct SearchView: View {
 
             // Apply filters
             results = results.filter { clip in
+                // Case-sensitive filter (FTS is case-insensitive, so filter post-search)
+                if caseSensitive && !searchText.isEmpty {
+                    let contentMatches = clip.content.contains(searchText)
+                    let extractedMatches = clip.extractedText?.contains(searchText) ?? false
+                    if !contentMatches && !extractedMatches { return false }
+                }
+
                 // Type filter - text includes both "text" and "rtf"
                 if filterType == .text && clip.contentType == "image" { return false }
                 if filterType == .images && clip.contentType != "image" { return false }
@@ -294,17 +301,18 @@ struct SearchView: View {
         // Add local event monitor for keyboard navigation
         eventMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [self] event in
             // Up arrow key
-            if event.keyCode == 126 && event.modifierFlags.intersection(.deviceIndependentFlagsMask).isEmpty {
+            let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+            if event.keyCode == 126 && modifiers.isEmpty {
                 navigateUp()
                 return nil
             }
             // Down arrow key
-            if event.keyCode == 125 && event.modifierFlags.intersection(.deviceIndependentFlagsMask).isEmpty {
+            if event.keyCode == 125 && modifiers.isEmpty {
                 navigateDown()
                 return nil
             }
             // Return key - copy selected and close
-            if event.keyCode == 36 && event.modifierFlags.intersection(.deviceIndependentFlagsMask).isEmpty {
+            if event.keyCode == 36 && modifiers.isEmpty {
                 if let selected = selectedClip {
                     Task {
                         await appState.copyToClipboard(clip: selected)

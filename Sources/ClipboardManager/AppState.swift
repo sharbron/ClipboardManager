@@ -82,7 +82,11 @@ class AppState: ObservableObject {
         }
 
         // Resume monitoring after a brief delay
-        try? await Task.sleep(nanoseconds: 100_000_000)
+        do {
+            try await Task.sleep(nanoseconds: 100_000_000)
+        } catch {
+            NSLog("⚠️ AppState: Task sleep was cancelled in copyToClipboard")
+        }
         clipboardMonitor?.resumeMonitoring()
 
         // Show notification if enabled (skip in test environment)
@@ -90,7 +94,9 @@ class AppState: ObservableObject {
         let isTestEnvironment = ProcessInfo.processInfo.processName.contains("xctest")
         if !isTestEnvironment {
             let enableNotifications = UserDefaults.standard.bool(forKey: "enableNotifications")
-            if enableNotifications || !UserDefaults.standard.dictionaryRepresentation().keys.contains("enableNotifications") {
+            let defaults = UserDefaults.standard.dictionaryRepresentation()
+            let hasNotificationKey = defaults.keys.contains("enableNotifications")
+            if enableNotifications || !hasNotificationKey {
                 let notification = UNMutableNotificationContent()
                 notification.title = "Copied"
                 notification.body = "Clip copied to clipboard"
@@ -141,7 +147,11 @@ class AppState: ObservableObject {
         pasteboard.setString(snippet.content, forType: .string)
 
         // Resume monitoring
-        try? await Task.sleep(nanoseconds: 100_000_000)
+        do {
+            try await Task.sleep(nanoseconds: 100_000_000)
+        } catch {
+            NSLog("⚠️ AppState: Task sleep was cancelled in expandSnippet")
+        }
         clipboardMonitor?.resumeMonitoring()
 
         // Increment usage count
@@ -152,7 +162,9 @@ class AppState: ObservableObject {
         let isTestEnvironment = ProcessInfo.processInfo.processName.contains("xctest")
         if !isTestEnvironment {
             let enableNotifications = UserDefaults.standard.bool(forKey: "enableNotifications")
-            if enableNotifications || !UserDefaults.standard.dictionaryRepresentation().keys.contains("enableNotifications") {
+            let defaults = UserDefaults.standard.dictionaryRepresentation()
+            let hasNotificationKey = defaults.keys.contains("enableNotifications")
+            if enableNotifications || !hasNotificationKey {
                 let notification = UNMutableNotificationContent()
                 notification.title = "Snippet Expanded"
                 notification.body = "'\(snippet.trigger)' copied to clipboard"
