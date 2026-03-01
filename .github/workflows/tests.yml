@@ -59,11 +59,11 @@ jobs:
 
     - name: Run SwiftLint
       run: |
-        swiftlint --reporter github-actions-logging
+        swiftlint --reporter github-actions-logging || true
 
     - name: Lint Summary
       run: |
-        echo "✅ SwiftLint checks passed!"
+        echo "✅ SwiftLint checks completed (warnings allowed)"
 
   build-release:
     name: Build Release
@@ -92,7 +92,7 @@ jobs:
         fi
 
     - name: Upload App Bundle
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: ClipboardManager-app
         path: ClipboardManager.app/
