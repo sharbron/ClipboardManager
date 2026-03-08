@@ -58,6 +58,24 @@ struct AboutView: View {
             Divider()
                 .padding(.horizontal)
 
+            // Keyboard Shortcuts
+            VStack(spacing: 8) {
+                Text("Keyboard Shortcuts")
+                    .font(.headline)
+
+                VStack(spacing: 4) {
+                    ShortcutRow(keys: "⌘⇧ Space", description: "Open clipboard history")
+                    ShortcutRow(keys: "⌘ 1-9", description: "Copy recent item from menu")
+                    ShortcutRow(keys: "↑ ↓", description: "Navigate results in search")
+                    ShortcutRow(keys: "↵ Return", description: "Copy selected and close")
+                    ShortcutRow(keys: "Esc", description: "Close search")
+                }
+                .padding(.horizontal)
+            }
+
+            Divider()
+                .padding(.horizontal)
+
             // Author
             VStack(spacing: 6) {
                 Text("Created by Steven Harbron")
@@ -75,7 +93,7 @@ struct AboutView: View {
             Spacer()
         }
         .padding()
-        .frame(width: 420, height: 440)
+        .frame(width: 420, height: 540)
     }
 }
 
@@ -100,5 +118,27 @@ struct FeatureCard: View {
         .padding(.horizontal, 8)
         .background(color.opacity(0.1))
         .cornerRadius(8)
+    }
+}
+
+struct ShortcutRow: View {
+    let keys: String
+    let description: String
+
+    var body: some View {
+        HStack {
+            Text(keys)
+                .font(.system(.body, design: .monospaced))
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(Color.secondary.opacity(0.1))
+                .cornerRadius(4)
+
+            Text(description)
+                .font(.caption)
+                .foregroundColor(.secondary)
+
+            Spacer()
+        }
     }
 }

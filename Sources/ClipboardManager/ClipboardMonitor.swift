@@ -75,12 +75,6 @@ actor ClipboardMonitor {
 
             // Use AsyncStream for periodic checking
             while !Task.isCancelled {
-                // Check if self is still alive
-                guard self as AnyObject? !== nil else {
-                    NSLog("⚠️ ClipboardMonitor: self was deallocated during monitoring loop")
-                    break
-                }
-
                 await self.checkClipboard()
 
                 // Wait 1.5 seconds before next check (reduced CPU usage)

@@ -3,6 +3,7 @@ import SQLite
 import CryptoKit
 import Vision
 import AppKit
+import os.log
 
 struct ClipboardEntry: Hashable {
     let id: Int64
@@ -49,6 +50,7 @@ struct ClipboardEntry: Hashable {
 
 /// Thread-safe database actor using Swift Concurrency
 actor ClipboardDatabase {
+    private let logger = Logger(subsystem: "com.clipboardmanager", category: "ClipboardDatabase")
     nonisolated(unsafe) private var db: Connection?
     nonisolated(unsafe) private let clips = Table("clips")
     nonisolated(unsafe) private let clipsFTS = VirtualTable("clips_fts")  // Full-text search table
@@ -102,7 +104,7 @@ actor ClipboardDatabase {
 
             isInitialized = true
         } catch {
-            print("Failed to initialize database: \(error)")
+            logger.error("Failed to initialize database: \(error.localizedDescription)")
             isInitialized = false
         }
     }
@@ -198,8 +200,12 @@ actor ClipboardDatabase {
             ]
 
             let addStatus = SecItemAdd(addQuery as CFDictionary, nil)
-            if addStatus != errSecSuccess {
-                print("Error: Failed to save encryption key to keychain (status: \(addStatus))")
+            guard addStatus == errSecSuccess else {
+                throw NSError(
+                    domain: NSOSStatusErrorDomain,
+                    code: Int(addStatus),
+                    userInfo: [NSLocalizedDescriptionKey: "Failed to save encryption key to Keychain (OSStatus \(addStatus))"]
+                )
             }
             encryptionKey = newKey
         }
@@ -224,7 +230,7 @@ actor ClipboardDatabase {
             guard let combined = sealed.combined else { return nil }
             return combined.base64EncodedString()
         } catch {
-            print("Encryption error: \(error.localizedDescription)")
+            logger.error("Encryption error: \(error.localizedDescription)")
             return nil
         }
     }
@@ -279,7 +285,7 @@ actor ClipboardDatabase {
 
     func saveClip(_ text: String, type: String = "text", image: Data? = nil, rtfData: Data? = nil, sourceApp: String? = nil) async {
         guard let encryptedContent = encrypt(text) else {
-            print("Error: Failed to encrypt clip content - clip not saved")
+            logger.error("Failed to encrypt clip content - clip not saved")
             return
         }
 
@@ -319,12 +325,12 @@ actor ClipboardDatabase {
                 } catch {
                     // Log FTS insertion failure but don't fail the entire save
                     // The clip is saved but won't be searchable via FTS
-                    print("Warning: Failed to add clip to FTS index (clipId: \(clipId)): \(error)")
+                    logger.warning("Failed to add clip to FTS index (clipId: \(clipId)): \(error.localizedDescription)")
                 }
             }
         } catch {
             // Log database save failures for debugging
-            print("Error: Failed to save clip to database: \(error)")
+            logger.error("Failed to save clip to database: \(error.localizedDescription)")
         }
     }
 
@@ -355,7 +361,7 @@ actor ClipboardDatabase {
             }
         } catch {
             // Log error but return empty array (graceful degradation)
-            print("Error: Failed to retrieve recent clips: \(error)")
+            logger.error("Failed to retrieve recent clips: \(error.localizedDescription)")
         }
 
         return entries
@@ -408,7 +414,7 @@ actor ClipboardDatabase {
         do {
             let clip = clips.filter(id == clipId)
             guard let row = try db?.pluck(clip) else {
-                print("Warning: Failed to toggle pin - clip not found (id: \(clipId))")
+                logger.warning("Failed to toggle pin - clip not found (id: \(clipId))")
                 return false
             }
 
@@ -416,7 +422,7 @@ actor ClipboardDatabase {
             try db?.run(clip.update(isPinned <- !currentPinned))
             return !currentPinned
         } catch {
-            print("Error: Failed to toggle pin (clipId: \(clipId)): \(error)")
+            logger.error("Failed to toggle pin (clipId: \(clipId)): \(error.localizedDescription)")
             return false
         }
     }
@@ -432,7 +438,7 @@ actor ClipboardDatabase {
 
             return true
         } catch {
-            print("Error: Failed to delete clip (clipId: \(clipId)): \(error)")
+            logger.error("Failed to delete clip (clipId: \(clipId)): \(error.localizedDescription)")
             return false
         }
     }
@@ -482,7 +488,7 @@ actor ClipboardDatabase {
         } catch {
             // If FTS fails, return empty results (FTS should be working)
             // This prevents falling back to inefficient full-table scan
-            print("FTS search failed: \(error)")
+            logger.error("FTS search failed: \(error.localizedDescription)")
         }
 
         return entries
@@ -610,9 +616,9 @@ actor ClipboardDatabase {
                 }
             }
 
-            print("Recovered \(recovered) clips from FTS index")
+            logger.info("Recovered \(recovered) clips from FTS index")
         } catch {
-            print("FTS recovery failed: \(error)")
+            logger.error("FTS recovery failed: \(error.localizedDescription)")
         }
 
         return recovered
