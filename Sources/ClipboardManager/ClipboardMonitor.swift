@@ -1,5 +1,6 @@
 import Cocoa
 import UserNotifications
+import os.log
 
 extension NSImage {
     func pngData() -> Data? {
@@ -13,6 +14,7 @@ extension NSImage {
 
 /// Modern async/await clipboard monitor using Swift Concurrency
 actor ClipboardMonitor {
+    private static let logger = Logger(subsystem: "com.clipboardmanager", category: "ClipboardMonitor")
     private var monitoringTask: Task<Void, Never>?
     private var lastChangeCount: Int
     private let pasteboard = NSPasteboard.general
@@ -33,29 +35,20 @@ actor ClipboardMonitor {
         self.snippetManager = manager
     }
 
-    /// Pause monitoring immediately (synchronous state change)
-    /// Called from MainActor context before modifying clipboard
-    nonisolated func pauseMonitoring() {
-        Task {
-            await setPauseState(true)
-        }
+    /// Pause monitoring before the app modifies the clipboard itself.
+    ///
+    /// Callers must `await` this before touching the pasteboard. An earlier version fired the
+    /// state change into a detached `Task` and claimed to be synchronous, which let the
+    /// pasteboard write land first and get re-captured as a brand new clip.
+    func pauseMonitoring() {
+        isRestoringClip = true
     }
 
-    /// Resume monitoring after clipboard modification
-    /// Called from MainActor context after clipboard is restored
-    nonisolated func resumeMonitoring() {
-        Task {
-            await setPauseState(false)
-        }
-    }
-
-    /// Set the pause state and resynchronize change count if resuming
-    /// Must be called on the actor to avoid race conditions
-    private func setPauseState(_ paused: Bool) {
-        isRestoringClip = paused
-        if !paused {
-            lastChangeCount = pasteboard.changeCount
-        }
+    /// Resume monitoring after the clipboard has been restored, resynchronising the change
+    /// count so the app's own write isn't mistaken for user activity.
+    func resumeMonitoring() {
+        isRestoringClip = false
+        lastChangeCount = pasteboard.changeCount
     }
 
     nonisolated func startMonitoring() {
@@ -69,7 +62,7 @@ actor ClipboardMonitor {
         // Start new monitoring task using async/await
         monitoringTask = Task { [weak self] in
             guard let self = self else {
-                NSLog("⚠️ ClipboardMonitor: self was deallocated, stopping monitoring task")
+                ClipboardMonitor.logger.debug("self was deallocated, stopping monitoring task")
                 return
             }
 
@@ -92,6 +85,15 @@ actor ClipboardMonitor {
         monitoringTask = nil
     }
 
+    /// Ask the UI to reload after a new clip lands.
+    private func notifyClipsChanged() {
+        guard let appState else {
+            ClipboardMonitor.logger.debug("appState was deallocated, clips not reloaded")
+            return
+        }
+        Task { @MainActor in appState.loadClips() }
+    }
+
     private func checkClipboard() async {
         // Skip monitoring if we're restoring a clip
         guard !isRestoringClip else { return }
@@ -100,12 +102,8 @@ actor ClipboardMonitor {
         guard pasteboard.changeCount != lastChangeCount else { return }
         lastChangeCount = pasteboard.changeCount
 
-        // Get max clip sizes from preferences (in KB)
-        let maxClipSizeKB = UserDefaults.standard.integer(forKey: "maxClipSize")
-        let maxClipSizeBytes = (maxClipSizeKB > 0 ? maxClipSizeKB : 100) * 1024
-
-        let maxImageSizeKB = UserDefaults.standard.integer(forKey: "maxImageSize")
-        let maxImageSizeBytes = (maxImageSizeKB > 0 ? maxImageSizeKB : 2048) * 1024
+        let maxClipSizeBytes = Preferences.maxClipSizeBytes
+        let maxImageSizeBytes = Preferences.maxImageSizeBytes
 
         // Get the name of the app that owns the clipboard
         let source = NSWorkspace.shared.frontmostApplication?.localizedName
@@ -133,11 +131,7 @@ actor ClipboardMonitor {
             if !isDuplicate {
                 await database.saveClip(imageDescription, type: "image", image: pngData, sourceApp: source)
                 lastContent = imageDescription
-                if let appState = appState {
-                    Task { @MainActor in appState.loadClips() }
-                } else {
-                    NSLog("⚠️ ClipboardMonitor: appState was deallocated, clips not reloaded")
-                }
+                notifyClipsChanged()
             }
             return
         }
@@ -176,11 +170,7 @@ actor ClipboardMonitor {
                         await database.saveClip(plainText, sourceApp: source)
                     }
                     lastContent = plainText
-                    if let appState = appState {
-                        Task { @MainActor in appState.loadClips() }
-                    } else {
-                        NSLog("⚠️ ClipboardMonitor: appState was deallocated, clips not reloaded")
-                    }
+                    notifyClipsChanged()
                 }
                 return
             }
@@ -223,11 +213,7 @@ actor ClipboardMonitor {
         if !isDuplicate {
             await database.saveClip(contentToSave, sourceApp: source)
             lastContent = contentToSave
-            if let appState = appState {
-                Task { @MainActor in appState.loadClips() }
-            } else {
-                NSLog("⚠️ ClipboardMonitor: appState was deallocated, clips not reloaded")
-            }
+            notifyClipsChanged()
         }
     }
 

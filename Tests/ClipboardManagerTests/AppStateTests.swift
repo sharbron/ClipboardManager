@@ -85,7 +85,7 @@ final class AppStateTests: XCTestCase {
         }
 
         // Set a custom limit
-        UserDefaults.standard.set(10, forKey: "menuBarClipCount")
+        UserDefaults.standard.set(10.0, forKey: Preferences.maxClips)
 
         // Load clips
         appState.loadClips()
@@ -98,7 +98,7 @@ final class AppStateTests: XCTestCase {
     @MainActor
     func testLoadClipsDefaultLimit() async throws {
         // Clear any custom limit
-        UserDefaults.standard.removeObject(forKey: "menuBarClipCount")
+        UserDefaults.standard.removeObject(forKey: Preferences.maxClips)
 
         // Save more clips than default limit
         for i in 1...20 {

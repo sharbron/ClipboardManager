@@ -5,15 +5,13 @@ import Cocoa
 actor SnippetManager {
     private let database: SnippetDatabase
     private var cachedSnippets: [String: Snippet] = [:]
-    private var isEnabled: Bool
+
+    /// Read live rather than cached at init, so toggling snippets in Preferences takes effect
+    /// immediately instead of waiting for the next launch.
+    private var isEnabled: Bool { Preferences.areSnippetsEnabled }
 
     init(database: SnippetDatabase) {
         self.database = database
-        self.isEnabled = UserDefaults.standard.bool(forKey: "snippetsEnabled")
-        // If never set, enable by default
-        if !UserDefaults.standard.dictionaryRepresentation().keys.contains("snippetsEnabled") {
-            self.isEnabled = true
-        }
     }
 
     /// Load all snippets into cache for fast lookup
@@ -35,64 +33,29 @@ actor SnippetManager {
         let trimmedContent = content.trimmingCharacters(in: .whitespacesAndNewlines)
 
         if let snippet = cachedSnippets[trimmedContent] {
-            // Increment usage count
             await database.incrementUsageCount(trigger: snippet.trigger)
-
-            // Return expanded content
-            return snippet.content
+            return snippet.expandedContent
         }
 
-        // Check if content ends with a trigger (for typing expansion)
-        for (trigger, snippet) in cachedSnippets where trimmedContent.hasSuffix(trigger) {
-            // Increment usage count
+        // Check if content ends with a trigger (for typing expansion).
+        // Only the trigger itself is replaced - any text before it is preserved,
+        // so copying "See you on ;date" doesn't discard "See you on ".
+        // Pick the longest matching trigger for determinism when triggers overlap.
+        let suffixMatch = cachedSnippets
+            .filter { trigger, _ in trimmedContent.hasSuffix(trigger) }
+            .max { $0.key.count < $1.key.count }
+
+        if let (trigger, snippet) = suffixMatch {
             await database.incrementUsageCount(trigger: trigger)
 
-            // Return expanded content
-            return snippet.content
+            let prefix = String(trimmedContent.dropLast(trigger.count))
+            return prefix + snippet.expandedContent
         }
 
         return nil
     }
 
-    /// Manually expand a snippet trigger
-    func expandSnippet(trigger: String) async -> String? {
-        guard isEnabled else { return nil }
-
-        if let snippet = cachedSnippets[trigger] {
-            await database.incrementUsageCount(trigger: trigger)
-            return snippet.content
-        }
-
-        // Try to fetch from database if not in cache
-        if let snippet = await database.getSnippet(byTrigger: trigger) {
-            cachedSnippets[trigger] = snippet
-            await database.incrementUsageCount(trigger: trigger)
-            return snippet.content
-        }
-
-        return nil
-    }
-
-    /// Get all available snippet triggers
-    func getAllTriggers() async -> [String] {
-        if cachedSnippets.isEmpty {
-            await loadSnippets()
-        }
-        return Array(cachedSnippets.keys).sorted()
-    }
-
-    /// Enable or disable snippet expansion
-    func setEnabled(_ enabled: Bool) {
-        isEnabled = enabled
-        UserDefaults.standard.set(enabled, forKey: "snippetsEnabled")
-    }
-
-    /// Check if snippets are enabled
-    func getEnabled() -> Bool {
-        return isEnabled
-    }
-
-    /// Refresh cache when snippets are added/removed
+    /// Refresh cache when snippets are added, edited or removed
     func refreshCache() async {
         await loadSnippets()
     }

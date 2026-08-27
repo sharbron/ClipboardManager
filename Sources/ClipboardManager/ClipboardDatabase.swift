@@ -15,24 +15,23 @@ struct ClipboardEntry: Hashable {
     let sourceApp: String?  // Name of app that created this clip
     let extractedText: String?  // OCR extracted text from images
 
-    // Cached preview text for better performance
-    var previewText: String {
+    /// Single-line preview truncated to `maxLength`. Views pass the user's preferred preview
+    /// length; the `previewText` shorthand keeps the compact default used in dense lists.
+    func preview(maxLength: Int) -> String {
         if contentType == "image" {
-            // If we have extracted text, show it
-            if let extracted = extractedText, !extracted.isEmpty {
-                var preview = extracted.replacingOccurrences(of: "\n", with: " ")
-                preview = preview.trimmingCharacters(in: .whitespacesAndNewlines)
-                if preview.count > 50 {
-                    preview = String(preview.prefix(50)) + "..."
-                }
-                return "[Image with text]: " + preview
-            }
-            return content
+            guard let extracted = extractedText, !extracted.isEmpty else { return content }
+            return "[Image with text]: " + Self.condense(extracted, maxLength: maxLength)
         }
-        var preview = content.replacingOccurrences(of: "\n", with: " ")
+        return Self.condense(content, maxLength: maxLength)
+    }
+
+    var previewText: String { preview(maxLength: 50) }
+
+    private static func condense(_ text: String, maxLength: Int) -> String {
+        var preview = text.replacingOccurrences(of: "\n", with: " ")
         preview = preview.trimmingCharacters(in: .whitespacesAndNewlines)
-        if preview.count > 50 {
-            preview = String(preview.prefix(50)) + "..."
+        if preview.count > maxLength {
+            preview = String(preview.prefix(maxLength)) + "..."
         }
         return preview
     }
@@ -50,10 +49,16 @@ struct ClipboardEntry: Hashable {
 
 /// Thread-safe database actor using Swift Concurrency
 actor ClipboardDatabase {
+    /// Bumped whenever the on-disk layout changes. Stored in the database itself via
+    /// `PRAGMA user_version`, so migration state can never drift away from the data it
+    /// describes - an earlier version tracked it in UserDefaults, where clearing preferences
+    /// (or moving the database to a fresh account) re-ran the encryption migrations over
+    /// already-encrypted rows and silently destroyed the history.
+    private static let schemaVersion: Int64 = 1
+
     private let logger = Logger(subsystem: "com.clipboardmanager", category: "ClipboardDatabase")
     nonisolated(unsafe) private var db: Connection?
     nonisolated(unsafe) private let clips = Table("clips")
-    nonisolated(unsafe) private let clipsFTS = VirtualTable("clips_fts")  // Full-text search table
 
     nonisolated(unsafe) private let id = Expression<Int64>("id")
     nonisolated(unsafe) private let timestamp = Expression<String>("timestamp")
@@ -64,17 +69,15 @@ actor ClipboardDatabase {
     nonisolated(unsafe) private let sourceApp = Expression<String?>("source_app")
     nonisolated(unsafe) private let extractedText = Expression<String?>("extracted_text")
 
-    // FTS columns
-    nonisolated(unsafe) private let rowid = Expression<Int64>("rowid")
-    nonisolated(unsafe) private let ftsContent = Expression<String>("content")
+    // Cipher and connection are set once during init and never modified.
+    // Using nonisolated(unsafe) because SQLite.swift doesn't support Sendable.
+    // Safe because: init runs single-threaded, then all access is serialized by the actor.
+    nonisolated(unsafe) private var cipher: Cipher?
 
-    // Encryption key and connection are set once during init and never modified
-    // Using nonisolated(unsafe) because SQLite.swift doesn't support Sendable
-    // Safe because: init runs single-threaded, then all access is serialized by actor
-    nonisolated(unsafe) private var encryptionKey: SymmetricKey?
+    /// Why startup failed, or nil if the database is usable. Written only in init.
+    nonisolated(unsafe) private(set) var initializationError: String?
 
-    // isInitialized is written only in init, then read-only - safe for nonisolated(unsafe)
-    nonisolated(unsafe) var isInitialized = false
+    nonisolated var isInitialized: Bool { initializationError == nil }
 
     // Reuse ISO8601DateFormatter for better performance
     private let isoFormatter = ISO8601DateFormatter()
@@ -82,8 +85,9 @@ actor ClipboardDatabase {
     // Path used by this database instance (for cleanup in tests)
     nonisolated(unsafe) private(set) var databasePath: String = ""
 
+    /// Opens the database and loads the encryption key. Kept cheap and side-effect free -
+    /// schema migrations run in `prepare()` so they don't block app launch on the main thread.
     init(path: String? = nil) {
-        // Initialize all properties first before any method calls to satisfy Swift 6 concurrency
         do {
             let dbPath = path ?? NSHomeDirectory() + "/.clipboard_history.db"
             databasePath = dbPath
@@ -96,20 +100,18 @@ actor ClipboardDatabase {
                 ofItemAtPath: dbPath
             )
 
-            // Initialize database schema
-            try initializeSchema(connection)
-
-            // Migrate and populate FTS
-            try migrateAndPopulateFTS(connection)
-
-            isInitialized = true
+            try createSchema(connection)
+            cipher = Cipher(key: try KeychainKeyStore.loadOrCreateKey(
+                service: "clipboard_manager_swift",
+                account: "encryption_key"
+            ))
         } catch {
             logger.error("Failed to initialize database: \(error.localizedDescription)")
-            isInitialized = false
+            initializationError = error.localizedDescription
         }
     }
 
-    private nonisolated func initializeSchema(_ connection: Connection) throws {
+    private nonisolated func createSchema(_ connection: Connection) throws {
         try connection.run(clips.create(ifNotExists: true) { table in
             table.column(id, primaryKey: .autoincrement)
             table.column(timestamp)
@@ -117,21 +119,43 @@ actor ClipboardDatabase {
             table.column(content)
             table.column(imageData)
             table.column(isPinned, defaultValue: false)
+            table.column(sourceApp)
+            table.column(extractedText)
         })
 
         try connection.run(clips.createIndex(timestamp, ifNotExists: true))
         try connection.run(clips.createIndex(isPinned, ifNotExists: true))
         try connection.run(clips.createIndex(contentType, ifNotExists: true))
-
-        try connection.run(clipsFTS.create(.FTS4([ftsContent]), ifNotExists: true))
     }
 
-    private nonisolated func migrateAndPopulateFTS(_ connection: Connection) throws {
-        // Migrate database
+    // MARK: - Migration
+
+    /// Brings an existing database up to the current schema version. Safe to call repeatedly;
+    /// every step is individually idempotent.
+    func prepare() async {
+        guard let connection = db else { return }
+
+        do {
+            let version = try connection.scalar("PRAGMA user_version") as? Int64 ?? 0
+            guard version < Self.schemaVersion else { return }
+
+            logger.info("Migrating database from schema version \(version) to \(Self.schemaVersion)")
+
+            try addMissingColumns(connection)
+            try encryptLegacyPlaintextColumns(connection)
+            try dropLegacyPlaintextIndex(connection)
+
+            try connection.run("PRAGMA user_version = \(Self.schemaVersion)")
+            logger.info("Database migration complete")
+        } catch {
+            logger.error("Database migration failed: \(error.localizedDescription)")
+        }
+    }
+
+    private func addMissingColumns(_ connection: Connection) throws {
         let tableInfo = try connection.prepare("PRAGMA table_info(clips)")
         var columns = Set<String>()
-
-        for row in tableInfo where row[1] as? String != nil {
+        for row in tableInfo {
             if let columnName = row[1] as? String {
                 columns.insert(columnName)
             }
@@ -149,105 +173,76 @@ actor ClipboardDatabase {
         if !columns.contains("extracted_text") {
             try connection.run("ALTER TABLE clips ADD COLUMN extracted_text TEXT")
         }
+    }
 
-        // Initialize encryption key
-        try initializeEncryptionKey()
+    /// OCR text and image/RTF blobs were both stored unencrypted in earlier versions.
+    ///
+    /// Rows that already decrypt cleanly are skipped, so re-running this is harmless. That
+    /// check is what makes the migration safe: GCM's authentication tag means plaintext will
+    /// not masquerade as valid ciphertext, and encrypting an already-encrypted value a second
+    /// time would leave the data permanently unreadable.
+    private func encryptLegacyPlaintextColumns(_ connection: Connection) throws {
+        guard let cipher else { return }
 
-        // Populate FTS if needed
-        let count = try connection.scalar(clipsFTS.count)
-        if count == 0 {
-            let allClips = try connection.prepare(clips)
-            for row in allClips {
-                let encryptedText = row[content]
-                if let encKey = encryptionKey,
-                   let data = Data(base64Encoded: encryptedText),
-                   let decrypted = decryptForMigration(data, using: encKey) {
-                    try connection.run(clipsFTS.insert(
-                        rowid <- row[id],
-                        ftsContent <- decrypted
-                    ))
-                }
-            }
+        var migratedText = 0
+        for row in try connection.prepare(clips.filter(extractedText != nil)) {
+            guard let value = row[extractedText], !value.isEmpty else { continue }
+            guard !cipher.isEncrypted(value) else { continue }
+            guard let encrypted = cipher.encrypt(value) else { continue }
+            try connection.run(clips.filter(id == row[id]).update(extractedText <- encrypted))
+            migratedText += 1
+        }
+
+        var migratedBlobs = 0
+        for row in try connection.prepare(clips.filter(imageData != nil)) {
+            guard let value = row[imageData], !value.isEmpty else { continue }
+            guard !cipher.isEncrypted(value) else { continue }
+            guard let encrypted = cipher.encrypt(value) else { continue }
+            try connection.run(clips.filter(id == row[id]).update(imageData <- encrypted))
+            migratedBlobs += 1
+        }
+
+        if migratedText > 0 || migratedBlobs > 0 {
+            logger.info("Encrypted \(migratedText) legacy OCR value(s) and \(migratedBlobs) legacy blob(s)")
         }
     }
 
-    private nonisolated func initializeEncryptionKey() throws {
-        let service = "clipboard_manager_swift"
-        let account = "encryption_key"
+    /// Older versions maintained a `clips_fts` index whose shadow tables held an unencrypted
+    /// copy of every clip, defeating the at-rest encryption. Drop it and reclaim the freed
+    /// pages so those bytes are actually overwritten rather than merely unlinked.
+    private func dropLegacyPlaintextIndex(_ connection: Connection) throws {
+        let existing = try connection.scalar(
+            "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'clips_fts'"
+        ) as? Int64 ?? 0
+        guard existing > 0 else { return }
 
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: account,
-            kSecReturnData as String: true
-        ]
-
-        var result: AnyObject?
-        let status = SecItemCopyMatching(query as CFDictionary, &result)
-
-        if status == errSecSuccess, let keyData = result as? Data {
-            encryptionKey = SymmetricKey(data: keyData)
-        } else {
-            let newKey = SymmetricKey(size: .bits256)
-            let keyData = newKey.withUnsafeBytes { Data($0) }
-
-            let addQuery: [String: Any] = [
-                kSecClass as String: kSecClassGenericPassword,
-                kSecAttrService as String: service,
-                kSecAttrAccount as String: account,
-                kSecValueData as String: keyData,
-                kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock
-            ]
-
-            let addStatus = SecItemAdd(addQuery as CFDictionary, nil)
-            guard addStatus == errSecSuccess else {
-                throw NSError(
-                    domain: NSOSStatusErrorDomain,
-                    code: Int(addStatus),
-                    userInfo: [NSLocalizedDescriptionKey: "Failed to save encryption key to Keychain (OSStatus \(addStatus))"]
-                )
-            }
-            encryptionKey = newKey
-        }
+        try connection.run("DROP TABLE IF EXISTS clips_fts")
+        try connection.run("VACUUM")
+        logger.info("Dropped legacy plaintext FTS index")
     }
 
-    private nonisolated func decryptForMigration(_ data: Data, using key: SymmetricKey) -> String? {
-        do {
-            let sealedBox = try AES.GCM.SealedBox(combined: data)
-            let decryptedData = try AES.GCM.open(sealedBox, using: key)
-            return String(data: decryptedData, encoding: .utf8)
-        } catch {
-            return nil
-        }
-    }
+    // MARK: - Encryption helpers
 
     private func encrypt(_ text: String) -> String? {
-        guard let key = encryptionKey,
-              let data = text.data(using: .utf8) else { return nil }
-
-        do {
-            let sealed = try AES.GCM.seal(data, using: key)
-            guard let combined = sealed.combined else { return nil }
-            return combined.base64EncodedString()
-        } catch {
-            logger.error("Encryption error: \(error.localizedDescription)")
+        guard let encrypted = cipher?.encrypt(text) else {
+            logger.error("Encryption failed - no key available")
             return nil
         }
+        return encrypted
     }
 
+    // Decryption failures are not logged: the message could echo sensitive material, and a
+    // failure just means corrupted data or a key mismatch.
     private func decrypt(_ encryptedText: String) -> String? {
-        guard let key = encryptionKey,
-              let data = Data(base64Encoded: encryptedText) else { return nil }
+        cipher?.decrypt(encryptedText)
+    }
 
-        do {
-            let sealedBox = try AES.GCM.SealedBox(combined: data)
-            let decryptedData = try AES.GCM.open(sealedBox, using: key)
-            return String(data: decryptedData, encoding: .utf8)
-        } catch {
-            // Decryption can fail for corrupted data or wrong key
-            // Don't log the error as it could expose sensitive info
-            return nil
-        }
+    private func encryptBinary(_ data: Data) -> Data? {
+        cipher?.encrypt(data)
+    }
+
+    private func decryptBinary(_ data: Data) -> Data? {
+        cipher?.decrypt(data)
     }
 
     // MARK: - OCR
@@ -283,7 +278,13 @@ actor ClipboardDatabase {
         }
     }
 
-    func saveClip(_ text: String, type: String = "text", image: Data? = nil, rtfData: Data? = nil, sourceApp: String? = nil) async {
+    func saveClip(
+        _ text: String,
+        type: String = "text",
+        image: Data? = nil,
+        rtfData: Data? = nil,
+        sourceApp: String? = nil
+    ) async {
         guard let encryptedContent = encrypt(text) else {
             logger.error("Failed to encrypt clip content - clip not saved")
             return
@@ -291,43 +292,38 @@ actor ClipboardDatabase {
 
         // Perform OCR on images if enabled
         var ocrText: String?
-        let ocrEnabled = UserDefaults.standard.bool(forKey: "ocrEnabled")
-        if type == "image", let imageData = image, (ocrEnabled || !UserDefaults.standard.dictionaryRepresentation().keys.contains("ocrEnabled")) {
+        if type == "image", let imageData = image, Preferences.isOCREnabled {
             ocrText = await extractTextFromImage(imageData)
+        }
+
+        // OCR text can contain anything visible in a screenshot (passwords, codes, documents),
+        // so it must be encrypted the same as the clip content itself.
+        let encryptedOcrText = ocrText.flatMap { encrypt($0) }
+
+        // Use imageData field for both images and RTF data
+        let binaryData = image ?? rtfData
+        let encryptedBinaryData: Data?
+        if let binaryData {
+            guard let encrypted = encryptBinary(binaryData) else {
+                logger.error("Failed to encrypt image/RTF data - clip not saved")
+                return
+            }
+            encryptedBinaryData = encrypted
+        } else {
+            encryptedBinaryData = nil
         }
 
         do {
             let now = isoFormatter.string(from: Date())
-            // Use imageData field for both images and RTF data
-            let binaryData = image ?? rtfData
-            let clipId = try db?.run(clips.insert(
+            _ = try db?.run(clips.insert(
                 timestamp <- now,
                 contentType <- type,
                 content <- encryptedContent,
-                imageData <- binaryData,
+                imageData <- encryptedBinaryData,
                 isPinned <- false,
                 self.sourceApp <- sourceApp,
-                extractedText <- ocrText
+                extractedText <- encryptedOcrText
             ))
-
-            // Add to FTS index for fast searching
-            // Store decrypted content + extracted text in FTS for searchability
-            if let clipId = clipId {
-                var searchableText = text
-                if let extracted = ocrText, !extracted.isEmpty {
-                    searchableText += " " + extracted
-                }
-                do {
-                    try db?.run(clipsFTS.insert(
-                        rowid <- clipId,
-                        ftsContent <- searchableText
-                    ))
-                } catch {
-                    // Log FTS insertion failure but don't fail the entire save
-                    // The clip is saved but won't be searchable via FTS
-                    logger.warning("Failed to add clip to FTS index (clipId: \(clipId)): \(error.localizedDescription)")
-                }
-            }
         } catch {
             // Log database save failures for debugging
             logger.error("Failed to save clip to database: \(error.localizedDescription)")
@@ -343,19 +339,7 @@ actor ClipboardDatabase {
             guard let results = try db?.prepare(query) else { return entries }
 
             for row in results {
-                if let decryptedContent = decrypt(row[content]) {
-                    let date = isoFormatter.date(from: row[timestamp]) ?? Date()
-
-                    let entry = ClipboardEntry(
-                        id: row[id],
-                        timestamp: date,
-                        contentType: row[contentType],
-                        content: decryptedContent,
-                        imageData: nil,  // Don't load image data here - load on demand for performance
-                        isPinned: row[isPinned],
-                        sourceApp: row[sourceApp],
-                        extractedText: row[extractedText]
-                    )
+                if let entry = makeEntry(from: row) {
                     entries.append(entry)
                 }
             }
@@ -367,12 +351,26 @@ actor ClipboardDatabase {
         return entries
     }
 
+    private func makeEntry(from row: Row) -> ClipboardEntry? {
+        guard let decryptedContent = decrypt(row[content]) else { return nil }
+        return ClipboardEntry(
+            id: row[id],
+            timestamp: isoFormatter.date(from: row[timestamp]) ?? Date(),
+            contentType: row[contentType],
+            content: decryptedContent,
+            imageData: nil,  // Don't load image data here - load on demand for performance
+            isPinned: row[isPinned],
+            sourceApp: row[sourceApp],
+            extractedText: row[extractedText].flatMap { decrypt($0) }
+        )
+    }
+
     // Get image data on demand for a specific clip (lazy loading)
     func getImageData(for clipId: Int64) async -> Data? {
         do {
             let query = clips.filter(id == clipId)
-            guard let row = try db?.pluck(query) else { return nil }
-            return row[imageData]
+            guard let row = try db?.pluck(query), let encrypted = row[imageData] else { return nil }
+            return decryptBinary(encrypted)
         } catch {
             return nil
         }
@@ -391,12 +389,12 @@ actor ClipboardDatabase {
             // Decrypt the stored content
             guard let storedContent = decrypt(row[content]) else { return false }
 
-            // For images and RTF, compare binary data
+            // For images and RTF, compare decrypted binary data
             if type == "image", let newImageData = imageBytes {
-                let storedImageData = row[imageData]
+                let storedImageData = row[imageData].flatMap { decryptBinary($0) }
                 return storedImageData == newImageData
             } else if type == "rtf", let newRtfData = rtfBytes {
-                let storedRtfData = row[imageData] // RTF stored in imageData field
+                let storedRtfData = row[imageData].flatMap { decryptBinary($0) } // RTF stored in imageData field
                 return storedRtfData == newRtfData
             } else {
                 // For text, compare content
@@ -406,9 +404,6 @@ actor ClipboardDatabase {
             return false
         }
     }
-
-    // Removed: inefficient searchClips() method that decrypted all clips
-    // Use searchClipsWithFTS() instead for fast full-text search
 
     func togglePin(clipId: Int64) async -> Bool {
         do {
@@ -431,11 +426,6 @@ actor ClipboardDatabase {
         do {
             let clip = clips.filter(id == clipId)
             try db?.run(clip.delete())
-
-            // Also delete from FTS index
-            let ftsClip = clipsFTS.filter(rowid == clipId)
-            try db?.run(ftsClip.delete())
-
             return true
         } catch {
             logger.error("Failed to delete clip (clipId: \(clipId)): \(error.localizedDescription)")
@@ -443,52 +433,43 @@ actor ClipboardDatabase {
         }
     }
 
-    // Search using FTS (Full-Text Search) for better performance
-    func searchClipsWithFTS(query: String) async -> [ClipboardEntry] {
+    // Search by decrypting clips in memory and filtering - nothing plaintext ever touches disk.
+    // (Previously used a SQLite FTS index, but FTS shadow tables store an unencrypted copy of
+    // every clip's content, which defeated the at-rest encryption entirely.)
+    //
+    // Cancellation is honoured between rows so a superseded keystroke stops decrypting
+    // immediately instead of racing the query the user actually cares about.
+    func searchClips(query: String, limit: Int = 5000) async -> [ClipboardEntry] {
         var entries: [ClipboardEntry] = []
+        guard !query.isEmpty else { return entries }
 
         do {
-            guard let db = db else { return entries }
+            let searchQuery = clips.order(isPinned.desc, timestamp.desc).limit(limit)
+            guard let results = try db?.prepare(searchQuery) else { return entries }
 
-            // Use FTS MATCH for fast full-text search
-            // Escape special FTS characters to prevent query errors
-            let escapedQuery = query.replacingOccurrences(of: "\"", with: "\"\"")
-            // Select rowid explicitly from FTS results
-            let ftsQuery = clipsFTS.select(rowid).filter(clipsFTS.match(escapedQuery))
-            let results = try db.prepare(ftsQuery)
-
-            var clipIds: [Int64] = []
             for row in results {
-                let docid = row[rowid]
-                clipIds.append(docid)
-            }
+                if Task.isCancelled { return [] }
 
-            // Fetch full clip details for matching IDs
-            if !clipIds.isEmpty {
-                let matchingClips = clips.filter(clipIds.contains(id))
-                let query = matchingClips.order(timestamp.desc)
-                for row in try db.prepare(query) {
-                    if let decryptedContent = decrypt(row[content]) {
-                        let date = isoFormatter.date(from: row[timestamp]) ?? Date()
+                guard let decryptedContent = decrypt(row[content]) else { continue }
+                let extracted = row[extractedText].flatMap { decrypt($0) }
 
-                        let entry = ClipboardEntry(
-                            id: row[id],
-                            timestamp: date,
-                            contentType: row[contentType],
-                            content: decryptedContent,
-                            imageData: nil,  // Lazy load image data
-                            isPinned: row[isPinned],
-                            sourceApp: row[sourceApp],
-                            extractedText: row[extractedText]
-                        )
-                        entries.append(entry)
-                    }
-                }
+                let matches = decryptedContent.localizedCaseInsensitiveContains(query)
+                    || (extracted?.localizedCaseInsensitiveContains(query) ?? false)
+                guard matches else { continue }
+
+                entries.append(ClipboardEntry(
+                    id: row[id],
+                    timestamp: isoFormatter.date(from: row[timestamp]) ?? Date(),
+                    contentType: row[contentType],
+                    content: decryptedContent,
+                    imageData: nil,  // Lazy load image data
+                    isPinned: row[isPinned],
+                    sourceApp: row[sourceApp],
+                    extractedText: extracted
+                ))
             }
         } catch {
-            // If FTS fails, return empty results (FTS should be working)
-            // This prevents falling back to inefficient full-table scan
-            logger.error("FTS search failed: \(error.localizedDescription)")
+            logger.error("Search failed: \(error.localizedDescription)")
         }
 
         return entries
@@ -552,9 +533,8 @@ actor ClipboardDatabase {
     }
 
     func getDatabaseSize() async -> String {
-        let path = NSHomeDirectory() + "/.clipboard_history.db"
         do {
-            let attributes = try FileManager.default.attributesOfItem(atPath: path)
+            let attributes = try FileManager.default.attributesOfItem(atPath: databasePath)
             if let fileSize = attributes[.size] as? Int64 {
                 let bytes = Double(fileSize)
                 if bytes < 1024 {
@@ -569,58 +549,5 @@ actor ClipboardDatabase {
             return "Unknown"
         }
         return "Unknown"
-    }
-
-    /// Recover clips from FTS table that are missing from main clips table
-    /// This can happen if clips were accidentally deleted but FTS index remains
-    func recoverFromFTS() async -> Int {
-        guard let db = db else { return 0 }
-
-        var recovered = 0
-        do {
-            // Find all FTS entries that don't have corresponding clips
-            let query = """
-                SELECT rowid, content FROM clips_fts
-                WHERE rowid NOT IN (SELECT id FROM clips)
-                ORDER BY rowid
-            """
-
-            let now = isoFormatter.string(from: Date())
-
-            for row in try db.prepare(query) {
-                guard let ftsRowId = row[0] as? Int64,
-                      let textContent = row[1] as? String else { continue }
-
-                // Skip empty content
-                guard !textContent.isEmpty else { continue }
-
-                // Encrypt the content
-                guard let encryptedContent = encrypt(textContent) else { continue }
-
-                // Insert back into clips table with recovered timestamp
-                do {
-                    try db.run(clips.insert(
-                        id <- ftsRowId,
-                        timestamp <- now,
-                        contentType <- "text",
-                        content <- encryptedContent,
-                        imageData <- nil,
-                        isPinned <- false,
-                        sourceApp <- "Recovered",
-                        extractedText <- nil
-                    ))
-                    recovered += 1
-                } catch {
-                    // Skip duplicates or other errors
-                    continue
-                }
-            }
-
-            logger.info("Recovered \(recovered) clips from FTS index")
-        } catch {
-            logger.error("FTS recovery failed: \(error.localizedDescription)")
-        }
-
-        return recovered
     }
 }

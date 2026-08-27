@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct SnippetsView: View {
     @ObservedObject var appState: AppState
@@ -358,6 +359,9 @@ struct ImportExportView: View {
     @Binding var isPresented: Bool
     @State private var showingExportSuccess = false
     @State private var showingImportPicker = false
+    @State private var showingExportPanel = false
+    @State private var exportDocument: SnippetsExportDocument?
+    @State private var errorMessage: String?
 
     var body: some View {
         VStack(spacing: 20) {
@@ -366,7 +370,7 @@ struct ImportExportView: View {
                 .fontWeight(.bold)
 
             VStack(spacing: 12) {
-                Button(action: exportSnippets) {
+                Button(action: prepareExport) {
                     Label("Export Snippets", systemImage: "square.and.arrow.up")
                         .frame(maxWidth: .infinity)
                 }
@@ -395,27 +399,40 @@ struct ImportExportView: View {
         .alert("Export Successful", isPresented: $showingExportSuccess) {
             Button("OK", role: .cancel) {}
         } message: {
-            Text("Snippets exported to Downloads folder")
+            Text("Snippets exported successfully.")
+        }
+        .alert("Export Failed", isPresented: .constant(errorMessage != nil)) {
+            Button("OK", role: .cancel) { errorMessage = nil }
+        } message: {
+            Text(errorMessage ?? "")
+        }
+        .fileExporter(
+            isPresented: $showingExportPanel,
+            document: exportDocument,
+            contentType: .json,
+            defaultFilename: "ClipboardManager-Snippets"
+        ) { result in
+            handleExportResult(result)
         }
         .fileImporter(isPresented: $showingImportPicker, allowedContentTypes: [.json]) { result in
             handleImport(result)
         }
     }
 
-    private func exportSnippets() {
+    private func prepareExport() {
         Task {
             let snippets = await appState.exportSnippets()
+            exportDocument = SnippetsExportDocument(snippets: snippets)
+            showingExportPanel = true
+        }
+    }
 
-            let encoder = JSONEncoder()
-            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-
-            if let data = try? encoder.encode(snippets) {
-                let downloadsURL = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first!
-                let fileURL = downloadsURL.appendingPathComponent("ClipboardManager-Snippets-\(Date().timeIntervalSince1970).json")
-
-                try? data.write(to: fileURL)
-                showingExportSuccess = true
-            }
+    private func handleExportResult(_ result: Result<URL, Error>) {
+        switch result {
+        case .success:
+            showingExportSuccess = true
+        case .failure(let error):
+            errorMessage = error.localizedDescription
         }
     }
 
@@ -430,5 +447,26 @@ struct ImportExportView: View {
         case .failure:
             break
         }
+    }
+}
+
+struct SnippetsExportDocument: FileDocument {
+    static var readableContentTypes: [UTType] { [.json] }
+
+    var snippets: [ExportableSnippet]
+
+    init(snippets: [ExportableSnippet] = []) {
+        self.snippets = snippets
+    }
+
+    init(configuration: ReadConfiguration) throws {
+        snippets = []
+    }
+
+    func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        let data = try encoder.encode(snippets)
+        return FileWrapper(regularFileWithContents: data)
     }
 }

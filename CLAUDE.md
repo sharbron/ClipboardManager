@@ -18,9 +18,12 @@ ClipboardManager is a secure, native macOS menu bar application that monitors an
 3. **AppState** - Global state management for database, preferences, and windows
 4. **ClipboardDatabase** - SQLite database with AES-256-GCM encryption via CryptoKit
 5. **ClipboardMonitor** - Monitors clipboard changes and saves to database
-6. **WindowManager** - Manages search and preferences windows
-7. **MenuBarView** - Menu bar interface with smart date grouping
-8. **SearchView** - Enhanced search window with filters and bulk actions
+6. **SnippetDatabase** - SQLite database for text snippets/templates
+7. **SnippetManager** - Detects and expands snippet triggers on the clipboard
+8. **WindowManager** - Manages search and preferences windows
+9. **MenuBarView** - Menu bar interface with smart date grouping
+10. **SearchView** - Enhanced search window with filters and bulk actions
+11. **SnippetsView** - Manage snippet triggers, content, and import/export
 
 ### File Structure
 
@@ -30,19 +33,22 @@ Sources/ClipboardManager/
 ├── AppState.swift               # State management
 ├── ClipboardDatabase.swift      # Database & encryption
 ├── ClipboardMonitor.swift       # Clipboard monitoring
+├── SnippetDatabase.swift        # Snippet storage
+├── SnippetManager.swift         # Snippet trigger detection & expansion
 ├── WindowManager.swift          # Window management
 ├── Info.plist                   # Bundle configuration
 └── Views/
     ├── MenuBarView.swift        # Menu bar UI with date grouping
     ├── SearchView.swift         # Enhanced search interface
     ├── PreferencesView.swift    # Settings window
-    └── AboutView.swift          # About window
+    ├── AboutView.swift          # About window
+    └── SnippetsView.swift       # Snippet management UI
 ```
 
 ## Key Features
 
 ### Clipboard Management
-- **Auto-Capture**: Monitors clipboard every 0.5 seconds for changes
+- **Auto-Capture**: Polls the clipboard every 1.5 seconds for changes
 - **Smart Filtering**: Filters out duplicate consecutive entries
 - **Image Support**: Captures and displays images with thumbnails
 - **Pin Items**: Pin important clips to keep them at the top
@@ -55,8 +61,14 @@ Sources/ClipboardManager/
 - **Local Only**: No network access, all data stays on your Mac
 - **Authenticated Encryption**: Prevents tampering with encrypted data
 
+### Snippets / Text Expansion
+- **Trigger-Based Expansion**: Define triggers (e.g. `;email`) that expand to saved content when copied
+- **Usage Tracking**: Snippets are sorted by usage count
+- **Import/Export**: Snippets can be exported/imported as JSON
+- **Default Snippets**: Pre-populated with common templates (email, phone, signature, meeting, date/time)
+
 ### User Experience
-- **Global Hotkey**: Cmd+Shift+V to open menu from anywhere
+- **Global Hotkey**: Cmd+Shift+Space to open menu from anywhere
 - **Quick Access**: Cmd+1 through Cmd+9 for recent items
 - **Enhanced Search**: Powerful search with filters, sorting, and bulk actions
 - **Smart Cleanup**: Auto-cleanup with options for last 24 hours or all history
@@ -64,7 +76,7 @@ Sources/ClipboardManager/
 - **Launch at Login**: Optional auto-start using SMAppService
 
 ### Permissions
-- **Accessibility**: Required for global hotkey (Cmd+Shift+V)
+- **Accessibility**: Required for global hotkey (Cmd+Shift+Space)
 - Uses native macOS permission prompts only
 
 ## Recent Improvements
@@ -79,6 +91,7 @@ Sources/ClipboardManager/
 7. ✅ **Launch at Login** - Implemented using SMAppService
 8. ✅ **Smart Notifications** - Modern notification system
 9. ✅ **Preview Tooltips** - Hover to see quick previews
+10. ✅ **Snippets / Text Expansion** - Trigger-based snippet expansion with usage tracking and import/export
 
 ### Code Quality
 - SwiftLint integration with passing checks
@@ -91,11 +104,16 @@ Sources/ClipboardManager/
 ### Test Coverage
 
 Comprehensive test suite covering:
-- **ClipboardDatabase** - Encryption/decryption, CRUD operations, FTS search
+- **ClipboardDatabase** - Encryption/decryption, CRUD operations, in-memory search
 - **AppState** - State management, clipboard operations, reactive updates
 - **ClipboardEntry** - Preview text generation, hashable conformance
 
 ### Running Tests
+
+`swift test` requires the full Xcode toolchain (for XCTest), not just the Command Line Tools. If `swift test` fails with `no such module 'XCTest'`, switch the active developer directory:
+```bash
+sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+```
 
 ```bash
 # Run all tests
@@ -119,9 +137,12 @@ xcrun llvm-cov show .build/debug/ClipboardManagerPackageTests.xctest/Contents/Ma
 
 ```
 Tests/ClipboardManagerTests/
-├── ClipboardDatabaseTests.swift   # Database & encryption tests (40+ tests)
-├── AppStateTests.swift            # State management tests (20+ tests)
-└── ClipboardEntryTests.swift      # Data model tests (15+ tests)
+├── ClipboardDatabaseTests.swift   # Database & encryption tests (25 tests)
+├── AppStateTests.swift            # State management tests (17 tests)
+├── ClipboardEntryTests.swift      # Data model tests (15 tests)
+├── MigrationTests.swift           # Schema migration & at-rest encryption (7 tests)
+├── PreferencesTests.swift         # Preference defaults & import validation (5 tests)
+└── SnippetTokenTests.swift        # Dynamic snippet token expansion (5 tests)
 ```
 
 ### Continuous Integration
@@ -181,35 +202,91 @@ swift build -c release
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
+All keys, defaults and typed accessors live in `Preferences.swift`, which registers the
+defaults at launch. Read preferences through `Preferences` rather than `UserDefaults`
+directly, so the UI and the code that consumes a setting can't drift apart.
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
 | `launchAtLogin` | Bool | false | Auto-start on login |
-| `retentionDays` | Int | 30 | Days to keep clipboard history |
+| `autoClearOnLogout` | Bool | false | Wipe unpinned history on logout/shutdown |
+| `enableNotifications` | Bool | true | Show notifications on copy/expand |
+| `cleanupDays` | Double | 30 | Days to keep clipboard history before auto-cleanup |
+| `maxClips` | Double | 15 | Number of recent clips shown in the menu bar |
+| `maxClipSize` | Double | 100 | Max text clip size in KB |
+| `maxImageSize` | Double | 2048 | Max image clip size in KB |
+| `ocrEnabled` | Bool | true | Extract text from captured images |
+| `snippetsEnabled` | Bool | true | Enable snippet trigger expansion |
+| `previewLength` | Double | 150 | Max characters in menu/list previews |
+| `showTypeIcons` | Bool | true | Show content-type icons in menu and search |
+| `compactMode` | Bool | false | Tighter row spacing in menu and search |
+
+A legacy `menuBarClipCount` key duplicated `maxClips`; `Preferences.register()` folds any
+existing value into `maxClips` and removes it.
+
+### Schema Migrations
+
+Migration state lives in the database itself via `PRAGMA user_version`, checked in
+`prepare()` on each database actor and run off the main thread at launch. It must never move
+back into UserDefaults: the two stores can drift apart (preferences reset, a database restored
+onto a fresh account), and re-running the encryption migrations over already-encrypted rows
+would double-encrypt them and destroy the data. Every migration step is also individually
+idempotent - values that already decrypt are skipped - so a re-run is harmless either way.
+`MigrationTests.swift` pins both properties down.
 
 ### Database Schema
 
-**clips_fts** (FTS5 virtual table for full-text search):
-- `id` - INTEGER PRIMARY KEY
-- `content_encrypted` - BLOB (AES-256-GCM encrypted)
-- `nonce` - BLOB (12-byte nonce for GCM)
-- `timestamp` - INTEGER (Unix timestamp)
+**clips** (main table):
+- `id` - INTEGER PRIMARY KEY AUTOINCREMENT
+- `timestamp` - TEXT (ISO8601)
+- `content_type` - TEXT (`text`, `image`, or `rtf`)
+- `content` - TEXT (base64 AES-256-GCM combined ciphertext: nonce + ciphertext + tag)
+- `image_data` - BLOB, nullable (AES-256-GCM combined ciphertext of image bytes, or RTF data for `rtf` clips)
 - `is_pinned` - INTEGER (0 or 1)
-- `image_data` - BLOB (optional, for images)
+- `source_app` - TEXT, nullable
+- `extracted_text` - TEXT, nullable (OCR text from images, base64 AES-256-GCM ciphertext like `content`)
+
+Search decrypts clips in memory and filters, rather than keeping a persistent index: an FTS4
+index stores an unencrypted copy of every clip in its shadow tables, which would defeat the
+at-rest encryption. Installs upgrading from a version that had one get the `clips_fts` table
+dropped and the freed pages reclaimed with `VACUUM` (see `dropLegacyPlaintextIndex()`).
 
 Database location: `~/.clipboard_history.db`
+
+**snippets** (separate SQLite database for text expansion):
+- `id` - INTEGER PRIMARY KEY
+- `trigger` - TEXT (unique, e.g. `;email`)
+- `content` - TEXT (base64 AES-256-GCM ciphertext of the expansion content)
+- `description` - TEXT (base64 AES-256-GCM ciphertext)
+- `created_at` - TEXT (ISO8601)
+- `usage_count` - INTEGER
+
+Database location: `~/.clipboard_snippets.db` (also restricted to 0600)
+
+Snippet bodies are encrypted with the same key as the clipboard history - the stock snippets
+are an email address, phone number, mailing address and signature, so they are at least as
+sensitive as an average clip. Triggers stay in plaintext: they are the indexed lookup key and
+are not themselves revealing.
+
+Snippet content may contain `{{date}}`, `{{time}}` or `{{datetime}}` tokens, resolved at
+expansion time by `Snippet.resolvingTokens(in:now:)`.
 
 ### Encryption Details
 
 - **Algorithm**: AES-256-GCM (Galois/Counter Mode)
-- **Key Storage**: macOS Keychain with service "com.clipboardmanager.encryption"
+- **Key Storage**: macOS Keychain, service `clipboard_manager_swift`, account `encryption_key`
 - **Key Generation**: CryptoKit SymmetricKey (256-bit)
-- **Nonce**: Random 12-byte nonce per entry (stored unencrypted)
+- **Nonce**: Random 12-byte nonce per entry, part of the combined ciphertext blob (not separately stored)
 - **Authentication**: GCM provides built-in authentication tag
+- **What's encrypted**: in `clips`, the `content`, `extracted_text` (OCR) and `image_data` (images/RTF) columns; in `snippets`, the `content` and `description` columns. Only timestamps, content types, source app names, snippet triggers and usage counts are plaintext.
+- **Key loading**: `KeychainKeyStore.loadOrCreateKey` generates a new key only on `errSecItemNotFound`. Any other Keychain failure throws rather than minting a replacement, which would orphan every clip already on disk.
 - **File Permissions**: Database file set to 0600 (owner read/write only)
 
 ## Known Limitations
 
 1. **Accessibility Permission**: Required for global hotkey. Prompts on first launch.
 2. **Large Images**: Very large images may impact performance
-3. **Text Only Search**: FTS5 search works on text content only, not images
+3. **Text Only Search**: Search matches clip text and OCR-extracted text only, not image pixels
 4. **No Cloud Sync**: Local-only storage by design for security
 
 ## Troubleshooting
@@ -282,7 +359,6 @@ Users must run: `xattr -cr /Applications/ClipboardManager.app` on first install.
 - [ ] iCloud sync (optional)
 - [ ] Clipboard formatting preservation
 - [ ] Multi-device clipboard sharing
-- [ ] Clipboard templates/snippets
 - [ ] Tag/categorize clips
 - [ ] Export/import clipboard history
 - [ ] Password-protected clips
@@ -301,7 +377,6 @@ Users must run: `xattr -cr /Applications/ClipboardManager.app` on first install.
 - [Swift Package Manager](https://swift.org/package-manager/)
 - [Apple CryptoKit](https://developer.apple.com/documentation/cryptokit)
 - [SQLite.swift](https://github.com/stephencelis/SQLite.swift)
-- [FTS5 Full-Text Search](https://www.sqlite.org/fts5.html)
 
 ### Similar Projects
 - [Maccy](https://github.com/p0deje/Maccy) - Open source clipboard manager
@@ -317,5 +392,5 @@ Users must run: `xattr -cr /Applications/ClipboardManager.app` on first install.
 
 ---
 
-*Last Updated: 2025-11-06*
+*Last Updated: 2026-08-27*
 *Project Version: 1.0*
