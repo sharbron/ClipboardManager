@@ -15,7 +15,7 @@ struct MenuBarView: View {
             if appState.clips.contains(where: { $0.isPinned }) {
                 Section("Pinned") {
                     ForEach(pinnedClips) { clip in
-                        ClipMenuItemView(clip: clip)
+                        ClipMenuItemView(clip: clip, shortcut: quickAccessShortcuts[clip.id])
                     }
                 }
                 Divider()
@@ -25,7 +25,7 @@ struct MenuBarView: View {
             ForEach(sortedGroupedClips, id: \.label) { group in
                 Section(group.label) {
                     ForEach(group.clips) { clip in
-                        ClipMenuItemView(clip: clip)
+                        ClipMenuItemView(clip: clip, shortcut: quickAccessShortcuts[clip.id])
                     }
                 }
             }
@@ -65,6 +65,16 @@ struct MenuBarView: View {
         appState.clips.filter { $0.isPinned }
     }
 
+    /// Cmd+1 through Cmd+9 quick-paste, assigned to the 9 most recent clips (pinned first)
+    /// in the same top-to-bottom order they're displayed in.
+    private var quickAccessShortcuts: [Int64: Character] {
+        var assignments: [Int64: Character] = [:]
+        for (index, clip) in appState.clips.prefix(9).enumerated() {
+            assignments[clip.id] = Character("\(index + 1)")
+        }
+        return assignments
+    }
+
     private var sortedGroupedClips: [(label: String, clips: [ClipboardEntry], sortKey: Date)] {
         let unpinnedClips = appState.clips.filter { !$0.isPinned }
 
@@ -99,9 +109,18 @@ struct MenuBarView: View {
 
 struct ClipMenuItemView: View {
     let clip: ClipboardEntry
+    var shortcut: Character?
     @EnvironmentObject var appState: AppState
+    @AppStorage(Preferences.showTypeIcons) private var showTypeIcons: Bool = true
+    @AppStorage(Preferences.compactMode) private var compactMode: Bool = false
+    @AppStorage(Preferences.previewLength) private var previewLength: Double = 150
 
     var body: some View {
+        menuItem
+            .modifier(QuickAccessShortcut(shortcut: shortcut))
+    }
+
+    private var menuItem: some View {
         Menu {
             Button {
                 Task {
@@ -125,11 +144,13 @@ struct ClipMenuItemView: View {
                 Label("Delete", systemImage: "trash")
             }
         } label: {
-            HStack(spacing: 8) {
+            HStack(spacing: compactMode ? 4 : 8) {
                 // Icon
-                Image(systemName: iconName)
-                    .foregroundColor(iconColor)
-                    .frame(width: 16)
+                if showTypeIcons {
+                    Image(systemName: iconName)
+                        .foregroundColor(iconColor)
+                        .frame(width: 16)
+                }
 
                 // Preview text
                 Text(previewText)
@@ -180,11 +201,21 @@ struct ClipMenuItemView: View {
     }
 
     private var previewText: String {
-        clip.previewText
+        clip.preview(maxLength: Int(previewLength))
     }
 }
 
-// Make ClipboardEntry Identifiable for ForEach
-extension ClipboardEntry: Identifiable {
-    var idString: String { String(id) }
+private struct QuickAccessShortcut: ViewModifier {
+    let shortcut: Character?
+
+    func body(content: Content) -> some View {
+        if let shortcut {
+            content.keyboardShortcut(KeyEquivalent(shortcut), modifiers: [.command])
+        } else {
+            content
+        }
+    }
 }
+
+// Make ClipboardEntry usable directly in ForEach
+extension ClipboardEntry: Identifiable {}

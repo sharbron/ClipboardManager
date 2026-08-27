@@ -256,17 +256,17 @@ final class ClipboardDatabaseTests: XCTestCase {
         await database.saveClip("Testing full-text search functionality")
 
         // Search for "fox"
-        let foxResults = await database.searchClipsWithFTS(query: "fox")
+        let foxResults = await database.searchClips(query: "fox")
         XCTAssertEqual(foxResults.count, 1, "Should find 1 result for 'fox'")
         XCTAssertTrue(foxResults.first?.content.contains("fox") ?? false)
 
         // Search for "swift"
-        let swiftResults = await database.searchClipsWithFTS(query: "swift")
+        let swiftResults = await database.searchClips(query: "swift")
         XCTAssertEqual(swiftResults.count, 1, "Should find 1 result for 'swift'")
         XCTAssertTrue(swiftResults.first?.content.contains("Swift") ?? false)
 
         // Search for "search"
-        let searchResults = await database.searchClipsWithFTS(query: "search")
+        let searchResults = await database.searchClips(query: "search")
         XCTAssertEqual(searchResults.count, 1, "Should find 1 result for 'search'")
         XCTAssertTrue(searchResults.first?.content.contains("search") ?? false)
     }
@@ -277,11 +277,11 @@ final class ClipboardDatabaseTests: XCTestCase {
         await database.saveClip("Code: let x = \"hello\"")
 
         // Search for email (FTS escapes special chars internally)
-        let emailResults = await database.searchClipsWithFTS(query: "example")
+        let emailResults = await database.searchClips(query: "example")
         XCTAssertGreaterThanOrEqual(emailResults.count, 1, "Should find email")
 
         // Search for code content
-        let codeResults = await database.searchClipsWithFTS(query: "hello")
+        let codeResults = await database.searchClips(query: "hello")
         XCTAssertGreaterThanOrEqual(codeResults.count, 1, "Should find code snippet")
     }
 
@@ -291,7 +291,7 @@ final class ClipboardDatabaseTests: XCTestCase {
         await database.saveClip("Banana")
 
         // Search for non-existent term
-        let results = await database.searchClipsWithFTS(query: "nonexistent")
+        let results = await database.searchClips(query: "nonexistent")
         XCTAssertEqual(results.count, 0, "Should return no results for non-existent term")
     }
 
@@ -467,7 +467,7 @@ final class ClipboardDatabaseTests: XCTestCase {
         measure {
             let expectation = self.expectation(description: "Search clips")
             Task {
-                _ = await database.searchClipsWithFTS(query: "test")
+                _ = await database.searchClips(query: "test")
                 expectation.fulfill()
             }
             wait(for: [expectation], timeout: 5.0)

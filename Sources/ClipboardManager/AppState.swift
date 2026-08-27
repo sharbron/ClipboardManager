@@ -1,5 +1,8 @@
 import SwiftUI
 import UserNotifications
+import os.log
+
+private let logger = Logger(subsystem: "com.clipboardmanager", category: "AppState")
 
 /// Central state management for the app
 @MainActor
@@ -27,8 +30,7 @@ class AppState: ObservableObject {
         loadTask?.cancel()
 
         loadTask = Task {
-            let limit = UserDefaults.standard.integer(forKey: "menuBarClipCount")
-            clips = await database.getRecentClips(limit: limit > 0 ? limit : 15)
+            clips = await database.getRecentClips(limit: Preferences.menuBarClipCount)
         }
     }
 
@@ -61,8 +63,8 @@ class AppState: ObservableObject {
     }
 
     func copyToClipboard(clip: ClipboardEntry) async {
-        // Pause monitoring to prevent duplicate
-        clipboardMonitor?.pauseMonitoring()
+        // Pause monitoring before writing, so our own write isn't captured as a new clip.
+        await clipboardMonitor?.pauseMonitoring()
 
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
@@ -85,25 +87,23 @@ class AppState: ObservableObject {
         do {
             try await Task.sleep(nanoseconds: 100_000_000)
         } catch {
-            NSLog("⚠️ AppState: Task sleep was cancelled in copyToClipboard")
+            logger.debug("Task sleep was cancelled in copyToClipboard")
         }
-        clipboardMonitor?.resumeMonitoring()
+        await clipboardMonitor?.resumeMonitoring()
 
-        // Show notification if enabled (skip in test environment)
-        // Check if we're in a test by looking for xctest in the process name
-        let isTestEnvironment = ProcessInfo.processInfo.processName.contains("xctest")
-        if !isTestEnvironment {
-            let enableNotifications = UserDefaults.standard.bool(forKey: "enableNotifications")
-            let defaults = UserDefaults.standard.dictionaryRepresentation()
-            let hasNotificationKey = defaults.keys.contains("enableNotifications")
-            if enableNotifications || !hasNotificationKey {
-                let notification = UNMutableNotificationContent()
-                notification.title = "Copied"
-                notification.body = "Clip copied to clipboard"
-                let request = UNNotificationRequest(identifier: UUID().uuidString, content: notification, trigger: nil)
-                try? await UNUserNotificationCenter.current().add(request)
-            }
-        }
+        await Self.notify(title: "Copied", body: "Clip copied to clipboard")
+    }
+
+    /// Posts a user notification, honouring the preference and staying silent under XCTest.
+    private static func notify(title: String, body: String) async {
+        guard !ProcessInfo.processInfo.processName.contains("xctest") else { return }
+        guard Preferences.areNotificationsEnabled else { return }
+
+        let notification = UNMutableNotificationContent()
+        notification.title = title
+        notification.body = body
+        let request = UNNotificationRequest(identifier: UUID().uuidString, content: notification, trigger: nil)
+        try? await UNUserNotificationCenter.current().add(request)
     }
 
     // MARK: - Snippet Management
@@ -138,40 +138,25 @@ class AppState: ObservableObject {
     }
 
     func expandSnippet(_ snippet: Snippet) async {
-        // Pause monitoring
-        clipboardMonitor?.pauseMonitoring()
+        await clipboardMonitor?.pauseMonitoring()
 
-        // Copy expanded content to clipboard
+        // Copy expanded content to clipboard, resolving date/time tokens at expansion time
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
-        pasteboard.setString(snippet.content, forType: .string)
+        pasteboard.setString(snippet.expandedContent, forType: .string)
 
         // Resume monitoring
         do {
             try await Task.sleep(nanoseconds: 100_000_000)
         } catch {
-            NSLog("⚠️ AppState: Task sleep was cancelled in expandSnippet")
+            logger.debug("Task sleep was cancelled in expandSnippet")
         }
-        clipboardMonitor?.resumeMonitoring()
+        await clipboardMonitor?.resumeMonitoring()
 
         // Increment usage count
         await snippetDatabase.incrementUsageCount(trigger: snippet.trigger)
 
-        // Show notification (skip in test environment)
-        // Check if we're in a test by looking for xctest in the process name
-        let isTestEnvironment = ProcessInfo.processInfo.processName.contains("xctest")
-        if !isTestEnvironment {
-            let enableNotifications = UserDefaults.standard.bool(forKey: "enableNotifications")
-            let defaults = UserDefaults.standard.dictionaryRepresentation()
-            let hasNotificationKey = defaults.keys.contains("enableNotifications")
-            if enableNotifications || !hasNotificationKey {
-                let notification = UNMutableNotificationContent()
-                notification.title = "Snippet Expanded"
-                notification.body = "'\(snippet.trigger)' copied to clipboard"
-                let request = UNNotificationRequest(identifier: UUID().uuidString, content: notification, trigger: nil)
-                try? await UNUserNotificationCenter.current().add(request)
-            }
-        }
+        await Self.notify(title: "Snippet Expanded", body: "'\(snippet.trigger)' copied to clipboard")
     }
 
     func createDefaultSnippets() {

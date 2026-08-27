@@ -10,6 +10,8 @@ struct SearchView: View {
     @State private var selectedClip: ClipboardEntry?
     @State private var searchResults: [ClipboardEntry] = []
     @State private var eventMonitor: Any?
+    @State private var searchTask: Task<Void, Never>?
+    @State private var hostWindow: NSWindow?
     @FocusState private var isSearchFocused: Bool
 
     enum FilterType: String, CaseIterable {
@@ -190,7 +192,7 @@ struct SearchView: View {
             HStack {
                 Spacer()
                 Button("Close") {
-                    NSApplication.shared.keyWindow?.close()
+                    hostWindow?.close()
                 }
                 .keyboardShortcut(.escape, modifiers: [])
                 Spacer()
@@ -198,6 +200,11 @@ struct SearchView: View {
             .padding(8)
         }
         .frame(width: 900, height: 600)
+        .background(WindowAccessor { window in
+            // Only assign on a real change - `updateNSView` fires on every render, and
+            // writing @State unconditionally from there risks an update loop.
+            if hostWindow !== window { hostWindow = window }
+        })
         .onChange(of: searchText) { _ in performSearch() }
         .onChange(of: caseSensitive) { _ in performSearch() }
         .onChange(of: filterType) { _ in performSearch() }
@@ -210,6 +217,9 @@ struct SearchView: View {
             setupKeyboardShortcuts()
         }
         .onDisappear {
+            searchTask?.cancel()
+            searchTask = nil
+
             // Clean up event monitor to prevent memory leak
             if let monitor = eventMonitor {
                 NSEvent.removeMonitor(monitor)
@@ -218,23 +228,37 @@ struct SearchView: View {
         }
     }
 
+    /// Debounced so a burst of keystrokes triggers one query instead of one per character -
+    /// each query decrypts the whole history, so the old undebounced version also let several
+    /// searches run concurrently and race to assign `searchResults`, letting a stale query's
+    /// results land last.
     private func performSearch() {
-        Task {
+        searchTask?.cancel()
+
+        let query = searchText
+        searchTask = Task {
+            if !query.isEmpty {
+                try? await Task.sleep(nanoseconds: 200_000_000)
+                guard !Task.isCancelled else { return }
+            }
+
             var results: [ClipboardEntry]
 
-            if !searchText.isEmpty {
-                results = await appState.database.searchClipsWithFTS(query: searchText)
+            if !query.isEmpty {
+                results = await appState.database.searchClips(query: query)
             } else {
                 // Use a reasonable limit (1000) instead of 10,000 for better performance
                 results = await appState.database.getRecentClips(limit: 1000)
             }
 
+            guard !Task.isCancelled else { return }
+
             // Apply filters
             results = results.filter { clip in
-                // Case-sensitive filter (FTS is case-insensitive, so filter post-search)
-                if caseSensitive && !searchText.isEmpty {
-                    let contentMatches = clip.content.contains(searchText)
-                    let extractedMatches = clip.extractedText?.contains(searchText) ?? false
+                // The query itself matches case-insensitively, so narrow it here when asked
+                if caseSensitive && !query.isEmpty {
+                    let contentMatches = clip.content.contains(query)
+                    let extractedMatches = clip.extractedText?.contains(query) ?? false
                     if !contentMatches && !extractedMatches { return false }
                 }
 
@@ -249,11 +273,12 @@ struct SearchView: View {
                 return true
             }
 
-            // Sort
-            if sortOrder == .oldest {
-                results.sort { $0.timestamp < $1.timestamp }
-            } else {
-                results.sort { $0.timestamp > $1.timestamp }
+            // Sort, keeping pinned clips above the rest as everywhere else in the app
+            results.sort { lhs, rhs in
+                if lhs.isPinned != rhs.isPinned { return lhs.isPinned }
+                return sortOrder == .oldest
+                    ? lhs.timestamp < rhs.timestamp
+                    : lhs.timestamp > rhs.timestamp
             }
 
             searchResults = results
@@ -300,6 +325,11 @@ struct SearchView: View {
 
         // Add local event monitor for keyboard navigation
         eventMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [self] event in
+            // Only handle keys aimed at the search window. Without this the monitor swallows
+            // bare arrows and Return in every window of the app - including text fields in
+            // Preferences and the snippet editor - for as long as search stays open.
+            guard let window = hostWindow, event.window === window else { return event }
+
             // Up arrow key
             let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
             if event.keyCode == 126 && modifiers.isEmpty {
@@ -316,9 +346,7 @@ struct SearchView: View {
                 if let selected = selectedClip {
                     Task {
                         await appState.copyToClipboard(clip: selected)
-                        await MainActor.run {
-                            NSApplication.shared.keyWindow?.close()
-                        }
+                        await MainActor.run { hostWindow?.close() }
                     }
                 }
                 return nil
@@ -331,6 +359,9 @@ struct SearchView: View {
 struct ClipListItemView: View {
     let clip: ClipboardEntry
     @EnvironmentObject var appState: AppState
+    @AppStorage(Preferences.showTypeIcons) private var showTypeIcons: Bool = true
+    @AppStorage(Preferences.compactMode) private var compactMode: Bool = false
+    @AppStorage(Preferences.previewLength) private var previewLength: Double = 150
 
     // Cached date formatters for better performance
     private static let timeFormatter: DateFormatter = {
@@ -352,11 +383,13 @@ struct ClipListItemView: View {
     }()
 
     var body: some View {
-        HStack(spacing: 10) {
-            Image(systemName: iconName)
-                .foregroundColor(iconColor)
-                .frame(width: 18, height: 18)
-                .font(.system(size: 14))
+        HStack(spacing: compactMode ? 6 : 10) {
+            if showTypeIcons {
+                Image(systemName: iconName)
+                    .foregroundColor(iconColor)
+                    .frame(width: 18, height: 18)
+                    .font(.system(size: 14))
+            }
 
             Text(previewText)
                 .lineLimit(1)
@@ -375,7 +408,7 @@ struct ClipListItemView: View {
                 .foregroundColor(.secondary)
                 .lineLimit(1)
         }
-        .padding(.vertical, 4)
+        .padding(.vertical, compactMode ? 1 : 4)
         .contextMenu {
             Button {
                 Task {
@@ -435,12 +468,8 @@ struct ClipListItemView: View {
     }
 
     private var previewText: String {
-        // Use slightly shorter preview in search (45 chars vs 50 in menu)
-        let preview = clip.previewText
-        if preview.count > 45 {
-            return String(preview.prefix(45)) + "..."
-        }
-        return preview
+        // The result list is narrower than the menu, so trim a little tighter
+        clip.preview(maxLength: max(10, Int(previewLength) - 5))
     }
 }
 
@@ -630,5 +659,21 @@ struct DetailRow: View {
                 .font(.system(size: 11))
                 .foregroundColor(.primary)
         }
+    }
+}
+
+/// Bridges to the hosting `NSWindow` so the view can scope key handling and close itself
+/// without guessing at `NSApp.keyWindow`.
+private struct WindowAccessor: NSViewRepresentable {
+    let onResolve: (NSWindow?) -> Void
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        DispatchQueue.main.async { onResolve(view.window) }
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        DispatchQueue.main.async { onResolve(nsView.window) }
     }
 }

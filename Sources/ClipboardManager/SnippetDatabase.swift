@@ -1,5 +1,6 @@
 import Foundation
 import SQLite
+import os.log
 
 /// Represents a text snippet/template
 struct Snippet: Identifiable, Hashable {
@@ -19,10 +20,43 @@ struct Snippet: Identifiable, Hashable {
         }
         return preview
     }
+
+    /// Content with dynamic tokens resolved. Resolution happens at expansion time rather than
+    /// when the snippet is stored, so a "today's date" snippet stays current instead of
+    /// freezing the day it was created.
+    var expandedContent: String {
+        Snippet.resolvingTokens(in: content)
+    }
+
+    static let dateToken = "{{date}}"
+    static let timeToken = "{{time}}"
+    static let dateTimeToken = "{{datetime}}"
+
+    static func resolvingTokens(in content: String, now: Date = Date()) -> String {
+        guard content.contains("{{") else { return content }
+
+        let date = now.formatted(date: .long, time: .omitted)
+        let time = now.formatted(date: .omitted, time: .shortened)
+
+        return content
+            .replacingOccurrences(of: dateTimeToken, with: "\(date) \(time)")
+            .replacingOccurrences(of: dateToken, with: date)
+            .replacingOccurrences(of: timeToken, with: time)
+    }
 }
 
-/// Thread-safe database actor for managing snippets
+/// Thread-safe database actor for managing snippets.
+///
+/// Snippet bodies are encrypted at rest with the same key as the clipboard history: the
+/// stock snippets are email address, phone number, mailing address and signature, so the
+/// contents are at least as sensitive as an average clip. Triggers stay in plaintext because
+/// they are the indexed lookup key and are not themselves revealing.
 actor SnippetDatabase {
+    /// See `ClipboardDatabase.schemaVersion` - migration state lives in the database itself.
+    private static let schemaVersion: Int64 = 1
+
+    private let logger = Logger(subsystem: "com.clipboardmanager", category: "SnippetDatabase")
+
     nonisolated(unsafe) private var db: Connection?
     nonisolated(unsafe) private let snippets = Table("snippets")
 
@@ -33,13 +67,17 @@ actor SnippetDatabase {
     nonisolated(unsafe) private let createdAt = Expression<String>("created_at")
     nonisolated(unsafe) private let usageCount = Expression<Int>("usage_count")
 
-    nonisolated(unsafe) var isInitialized = false
+    nonisolated(unsafe) private var cipher: Cipher?
+
+    /// Why startup failed, or nil if the database is usable. Written only in init.
+    nonisolated(unsafe) private(set) var initializationError: String?
+
+    nonisolated var isInitialized: Bool { initializationError == nil }
 
     // Reuse ISO8601DateFormatter for better performance
     private let isoFormatter = ISO8601DateFormatter()
 
     init(databasePath: String? = nil) {
-        // Initialize all properties first before any method calls to satisfy Swift 6 concurrency
         do {
             let path = databasePath ?? (NSHomeDirectory() + "/.clipboard_snippets.db")
             let connection = try Connection(path)
@@ -51,7 +89,6 @@ actor SnippetDatabase {
                 ofItemAtPath: path
             )
 
-            // Initialize database schema inline
             try connection.run(snippets.create(ifNotExists: true) { table in
                 table.column(id, primaryKey: .autoincrement)
                 table.column(trigger, unique: true)
@@ -64,30 +101,73 @@ actor SnippetDatabase {
             // Create index for faster trigger lookups
             try connection.run(snippets.createIndex(trigger, ifNotExists: true))
 
-            isInitialized = true
+            cipher = Cipher(key: try KeychainKeyStore.loadOrCreateKey(
+                service: "clipboard_manager_swift",
+                account: "encryption_key"
+            ))
         } catch {
-            print("Failed to initialize snippet database: \(error)")
-            isInitialized = false
+            logger.error("Failed to initialize snippet database: \(error.localizedDescription)")
+            initializationError = error.localizedDescription
         }
     }
 
-    private func initializeDatabase() throws {
-        try db?.run(snippets.create(ifNotExists: true) { table in
-            table.column(id, primaryKey: .autoincrement)
-            table.column(trigger, unique: true)
-            table.column(content)
-            table.column(description)
-            table.column(createdAt)
-            table.column(usageCount, defaultValue: 0)
-        })
+    // MARK: - Migration
 
-        // Create index for faster trigger lookups
-        try db?.run(snippets.createIndex(trigger, ifNotExists: true))
+    /// Encrypts snippet bodies left in plaintext by earlier versions. Values that already
+    /// decrypt are skipped, so this is safe to run repeatedly.
+    func prepare() async {
+        guard let connection = db, let cipher else { return }
+
+        do {
+            let version = try connection.scalar("PRAGMA user_version") as? Int64 ?? 0
+            guard version < Self.schemaVersion else { return }
+
+            var migrated = 0
+            for row in try connection.prepare(snippets) {
+                var setters: [Setter] = []
+
+                let storedContent = row[content]
+                if !cipher.isEncrypted(storedContent), let encrypted = cipher.encrypt(storedContent) {
+                    setters.append(content <- encrypted)
+                }
+
+                let storedDescription = row[description]
+                if !cipher.isEncrypted(storedDescription), let encrypted = cipher.encrypt(storedDescription) {
+                    setters.append(description <- encrypted)
+                }
+
+                guard !setters.isEmpty else { continue }
+                try connection.run(snippets.filter(id == row[id]).update(setters))
+                migrated += 1
+            }
+
+            try connection.run("PRAGMA user_version = \(Self.schemaVersion)")
+            if migrated > 0 {
+                logger.info("Encrypted \(migrated) snippet(s) previously stored in plaintext")
+            }
+        } catch {
+            logger.error("Snippet migration failed: \(error.localizedDescription)")
+        }
+    }
+
+    // MARK: - Encryption helpers
+
+    /// Falls back to the raw value so a snippet stays usable if it hasn't been migrated yet
+    /// or its ciphertext is damaged - unlike a clip, losing one here is immediately visible
+    /// to the user and there is nothing to gain from hiding it.
+    private func decrypted(_ value: String) -> String {
+        cipher?.decrypt(value) ?? value
     }
 
     // MARK: - CRUD Operations
 
     func saveSnippet(trigger: String, content: String, description: String) async -> Bool {
+        guard let encryptedContent = cipher?.encrypt(content),
+              let encryptedDescription = cipher?.encrypt(description) else {
+            logger.error("Failed to encrypt snippet - not saved")
+            return false
+        }
+
         do {
             let now = isoFormatter.string(from: Date())
 
@@ -95,23 +175,22 @@ actor SnippetDatabase {
             if (try db?.pluck(snippets.filter(self.trigger == trigger))) != nil {
                 // Update existing snippet
                 try db?.run(snippets.filter(self.trigger == trigger).update(
-                    self.content <- content,
-                    self.description <- description
+                    self.content <- encryptedContent,
+                    self.description <- encryptedDescription
                 ))
-                return true
             } else {
                 // Insert new snippet
                 try db?.run(snippets.insert(
                     self.trigger <- trigger,
-                    self.content <- content,
-                    self.description <- description,
+                    self.content <- encryptedContent,
+                    self.description <- encryptedDescription,
                     createdAt <- now,
                     usageCount <- 0
                 ))
-                return true
             }
+            return true
         } catch {
-            print("Failed to save snippet: \(error)")
+            logger.error("Failed to save snippet: \(error.localizedDescription)")
             return false
         }
     }
@@ -125,43 +204,24 @@ actor SnippetDatabase {
             }
 
             for row in rows {
-                let date = isoFormatter.date(from: row[createdAt]) ?? Date()
-                let snippet = Snippet(
-                    id: row[id],
-                    trigger: row[trigger],
-                    content: row[content],
-                    description: row[description],
-                    createdAt: date,
-                    usageCount: row[usageCount]
-                )
-                results.append(snippet)
+                results.append(makeSnippet(from: row))
             }
         } catch {
-            print("Failed to fetch snippets: \(error)")
+            logger.error("Failed to fetch snippets: \(error.localizedDescription)")
         }
 
         return results
     }
 
-    func getSnippet(byTrigger triggerValue: String) async -> Snippet? {
-        do {
-            guard let row = try db?.pluck(snippets.filter(self.trigger == triggerValue)) else {
-                return nil
-            }
-
-            let date = isoFormatter.date(from: row[createdAt]) ?? Date()
-            return Snippet(
-                id: row[id],
-                trigger: row[trigger],
-                content: row[content],
-                description: row[description],
-                createdAt: date,
-                usageCount: row[usageCount]
-            )
-        } catch {
-            print("Failed to fetch snippet: \(error)")
-            return nil
-        }
+    private func makeSnippet(from row: Row) -> Snippet {
+        Snippet(
+            id: row[id],
+            trigger: row[trigger],
+            content: decrypted(row[content]),
+            description: decrypted(row[description]),
+            createdAt: isoFormatter.date(from: row[createdAt]) ?? Date(),
+            usageCount: row[usageCount]
+        )
     }
 
     func deleteSnippet(id: Int64) async -> Bool {
@@ -170,18 +230,7 @@ actor SnippetDatabase {
             try db?.run(snippet.delete())
             return true
         } catch {
-            print("Failed to delete snippet: \(error)")
-            return false
-        }
-    }
-
-    func deleteSnippet(trigger: String) async -> Bool {
-        do {
-            let snippet = snippets.filter(self.trigger == trigger)
-            try db?.run(snippet.delete())
-            return true
-        } catch {
-            print("Failed to delete snippet: \(error)")
+            logger.error("Failed to delete snippet: \(error.localizedDescription)")
             return false
         }
     }
@@ -194,15 +243,7 @@ actor SnippetDatabase {
                 try db?.run(snippet.update(usageCount <- currentCount + 1))
             }
         } catch {
-            print("Failed to increment usage count: \(error)")
-        }
-    }
-
-    func getSnippetCount() async -> Int {
-        do {
-            return try db?.scalar(snippets.count) ?? 0
-        } catch {
-            return 0
+            logger.error("Failed to increment usage count: \(error.localizedDescription)")
         }
     }
 
@@ -219,27 +260,43 @@ actor SnippetDatabase {
         }
     }
 
-    func importSnippets(_ snippets: [ExportableSnippet], replaceExisting: Bool = false) async -> Int {
-        if replaceExisting {
-            // Clear all existing snippets
-            do {
-                try db?.run(self.snippets.delete())
-            } catch {
-                print("Failed to clear snippets: \(error)")
-                return 0
-            }
-        }
+    /// Imports snippets atomically: with `replaceExisting` the wipe and the refill share one
+    /// transaction, so a failure part-way through can't leave the user with nothing.
+    func importSnippets(_ incoming: [ExportableSnippet], replaceExisting: Bool = false) async -> Int {
+        guard let db, let cipher else { return 0 }
 
         var importedCount = 0
-        for snippet in snippets {
-            let success = await saveSnippet(
-                trigger: snippet.trigger,
-                content: snippet.content,
-                description: snippet.description
-            )
-            if success {
-                importedCount += 1
+        do {
+            try db.transaction {
+                if replaceExisting {
+                    try db.run(snippets.delete())
+                }
+
+                let now = isoFormatter.string(from: Date())
+                for snippet in incoming {
+                    guard let encryptedContent = cipher.encrypt(snippet.content),
+                          let encryptedDescription = cipher.encrypt(snippet.description) else { continue }
+
+                    if (try db.pluck(snippets.filter(trigger == snippet.trigger))) != nil {
+                        try db.run(snippets.filter(trigger == snippet.trigger).update(
+                            content <- encryptedContent,
+                            description <- encryptedDescription
+                        ))
+                    } else {
+                        try db.run(snippets.insert(
+                            trigger <- snippet.trigger,
+                            content <- encryptedContent,
+                            description <- encryptedDescription,
+                            createdAt <- now,
+                            usageCount <- 0
+                        ))
+                    }
+                    importedCount += 1
+                }
             }
+        } catch {
+            logger.error("Failed to import snippets: \(error.localizedDescription)")
+            return 0
         }
 
         return importedCount
@@ -276,8 +333,8 @@ actor SnippetDatabase {
 
             Thanks!
             """, "Meeting template"),
-            (";date", Date().formatted(date: .long, time: .omitted), "Today's date"),
-            (";time", Date().formatted(date: .omitted, time: .shortened), "Current time")
+            (";date", Snippet.dateToken, "Today's date"),
+            (";time", Snippet.timeToken, "Current time")
         ]
 
         for (trigger, content, desc) in defaults {

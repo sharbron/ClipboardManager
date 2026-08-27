@@ -1,5 +1,8 @@
 import SwiftUI
 import ServiceManagement
+import os.log
+
+private let logger = Logger(subsystem: "com.clipboardmanager", category: "PreferencesView")
 
 struct PreferencesView: View {
     @EnvironmentObject var appState: AppState
@@ -50,9 +53,9 @@ struct PreferencesView: View {
 
 struct GeneralPreferencesView: View {
     @EnvironmentObject var appState: AppState
-    @AppStorage("launchAtLogin") private var launchAtLogin: Bool = false
-    @AppStorage("autoClearOnLogout") private var autoClearOnLogout: Bool = false
-    @AppStorage("enableNotifications") private var enableNotifications: Bool = true
+    @AppStorage(Preferences.launchAtLogin) private var launchAtLogin: Bool = false
+    @AppStorage(Preferences.autoClearOnLogout) private var autoClearOnLogout: Bool = false
+    @AppStorage(Preferences.enableNotifications) private var enableNotifications: Bool = true
 
     var body: some View {
         ScrollView {
@@ -117,7 +120,7 @@ struct GeneralPreferencesView: View {
                 try SMAppService.mainApp.unregister()
             }
         } catch {
-            print("Failed to \(enable ? "enable" : "disable") launch at login: \(error)")
+            logger.error("Failed to \(enable ? "enable" : "disable") launch at login: \(error.localizedDescription)")
         }
     }
 }
@@ -126,11 +129,11 @@ struct GeneralPreferencesView: View {
 
 struct HistoryPreferencesView: View {
     @EnvironmentObject var appState: AppState
-    @AppStorage("cleanupDays") private var cleanupDays: Double = 30
-    @AppStorage("maxClips") private var maxClips: Double = 15
-    @AppStorage("maxClipSize") private var maxClipSize: Double = 100
-    @AppStorage("maxImageSize") private var maxImageSize: Double = 2048
-    @AppStorage("ocrEnabled") private var ocrEnabled: Bool = true
+    @AppStorage(Preferences.cleanupDays) private var cleanupDays: Double = 30
+    @AppStorage(Preferences.maxClips) private var maxClips: Double = 15
+    @AppStorage(Preferences.maxClipSize) private var maxClipSize: Double = 100
+    @AppStorage(Preferences.maxImageSize) private var maxImageSize: Double = 2048
+    @AppStorage(Preferences.ocrEnabled) private var ocrEnabled: Bool = true
 
     var body: some View {
         ScrollView {
@@ -162,9 +165,8 @@ struct HistoryPreferencesView: View {
                             step: 1,
                             suffix: "clips"
                         )
-                        .onChange(of: maxClips) { newValue in
-                            UserDefaults.standard.set(Int(newValue), forKey: "menuBarClipCount")
-                            Task { @MainActor in appState.loadClips() }
+                        .onChange(of: maxClips) { _ in
+                            appState.loadClips()
                         }
 
                         Text("Number of recent clips to display in the menu bar.")
@@ -251,9 +253,9 @@ struct HistoryPreferencesView: View {
 // MARK: - Appearance Preferences Tab
 
 struct AppearancePreferencesView: View {
-    @AppStorage("previewLength") private var previewLength: Double = 150
-    @AppStorage("showTypeIcons") private var showTypeIcons: Bool = true
-    @AppStorage("compactMode") private var compactMode: Bool = false
+    @AppStorage(Preferences.previewLength) private var previewLength: Double = 150
+    @AppStorage(Preferences.showTypeIcons) private var showTypeIcons: Bool = true
+    @AppStorage(Preferences.compactMode) private var compactMode: Bool = false
 
     var body: some View {
         ScrollView {
@@ -497,27 +499,16 @@ struct AdvancedPreferencesView: View {
     private func loadStats() {
         Task {
             let allClips = await appState.database.getRecentClips(limit: 10000)
+            let size = await appState.database.getDatabaseSize()
 
             await MainActor.run {
                 totalClips = allClips.count
                 textCount = allClips.filter { $0.contentType == "text" || $0.contentType == "rtf" }.count
                 imageCount = allClips.filter { $0.contentType == "image" }.count
                 pinnedCount = allClips.filter { $0.isPinned }.count
-
-                // Calculate database size
-                let dbPath = NSHomeDirectory() + "/.clipboard_history.db"
-                if let attributes = try? FileManager.default.attributesOfItem(atPath: dbPath),
-                   let fileSize = attributes[.size] as? Int64 {
-                    databaseSize = formatFileSize(fileSize)
-                }
+                databaseSize = size
             }
         }
-    }
-
-    private func formatFileSize(_ bytes: Int64) -> String {
-        let formatter = ByteCountFormatter()
-        formatter.countStyle = .file
-        return formatter.string(fromByteCount: bytes)
     }
 
     private func revealDatabaseInFinder() {
@@ -581,12 +572,13 @@ struct AdvancedPreferencesView: View {
                 return false
             }
 
-            // Import settings into UserDefaults
+            // Import settings into UserDefaults, skipping unknown keys and values of the
+            // wrong type so a hand-edited file can't leave a preference unreadable.
             for (key, value) in json {
-                // Skip system keys that shouldn't be imported
-                guard !key.hasPrefix("NS") && !key.hasPrefix("Apple") else { continue }
+                guard Preferences.importable.contains(key),
+                      let coerced = Preferences.coerceImported(value, forKey: key) else { continue }
 
-                UserDefaults.standard.set(value, forKey: key)
+                UserDefaults.standard.set(coerced, forKey: key)
             }
 
             // Reload UI by resetting appearance and reloading clips
@@ -783,44 +775,5 @@ struct StatRow: View {
                 .foregroundColor(.primary)
                 .fontWeight(.semibold)
         }
-    }
-}
-
-// MARK: - Preferences Document
-
-import UniformTypeIdentifiers
-
-struct PreferencesDocument: FileDocument {
-    static var readableContentTypes: [UTType] { [.json] }
-
-    var settings: [String: Any] = [:]
-
-    init() {
-        // Export current UserDefaults
-        if let defaults = UserDefaults.standard.persistentDomain(forName: Bundle.main.bundleIdentifier ?? "") {
-            self.settings = defaults
-        }
-    }
-
-    init(configuration: ReadConfiguration) throws {
-        if let data = configuration.file.regularFileContents,
-           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-            self.settings = json
-        }
-    }
-
-    func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper {
-        let data = try JSONSerialization.data(withJSONObject: settings, options: [.prettyPrinted])
-        return FileWrapper(regularFileWithContents: data)
-    }
-}
-
-// MARK: - Snippets Preferences Tab
-
-struct SnippetsPreferencesView: View {
-    @EnvironmentObject var appState: AppState
-
-    var body: some View {
-        SnippetsView(appState: appState)
     }
 }
