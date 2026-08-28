@@ -361,7 +361,7 @@ struct ClipListItemView: View {
     @EnvironmentObject var appState: AppState
     @AppStorage(Preferences.showTypeIcons) private var showTypeIcons: Bool = true
     @AppStorage(Preferences.compactMode) private var compactMode: Bool = false
-    @AppStorage(Preferences.previewLength) private var previewLength: Double = 150
+    @AppStorage(Preferences.previewLength) private var previewLength: Double = 60
 
     // Cached date formatters for better performance
     private static let timeFormatter: DateFormatter = {

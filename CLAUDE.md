@@ -182,8 +182,11 @@ func testSaveClip_WithValidContent_StoresEncrypted() async throws {
 ### Build Commands
 
 ```bash
-# Using build script (recommended)
+# Build the app bundle in the repo
 ./create_app.sh
+
+# Build and replace /Applications/ClipboardManager.app, then launch it
+./create_app.sh --install --run
 
 # Manual build
 swift build -c release
@@ -191,6 +194,12 @@ swift build -c release
 # Create DMG for distribution
 ./create_dmg.sh
 ```
+
+Both bundles declare the same identifier (`com.clipboard.manager`), so macOS resolves a
+launch from Spotlight, the Dock or a login item to whichever copy is installed in
+`/Applications` - not the one just built here. `create_app.sh` warns when the installed copy
+has fallen behind; `--install` updates it. Note that replacing an unsigned app can reset its
+Accessibility permission, which the ⌘⇧Space hotkey depends on.
 
 ### Build Output
 - **App Bundle**: `ClipboardManager.app` (~600 KB)
@@ -340,9 +349,12 @@ leaks -atExit -- .build/release/ClipboardManager
 ## Distribution
 
 ### Unsigned Distribution (Current)
-1. Build with `./create_app.sh`
+1. Build with `./create_app.sh --install`
 2. Clear quarantine: `xattr -cr ClipboardManager.app`
-3. Ad-hoc code signature applied automatically
+
+The bundle is not code signed at all - `create_app.sh` runs no `codesign` step. Locally built
+copies carry no quarantine attribute, so they launch without complaint; a bundle that has
+travelled through a download or a DMG will need the `xattr -cr` above.
 
 Users must run: `xattr -cr /Applications/ClipboardManager.app` on first install.
 
@@ -393,4 +405,4 @@ Users must run: `xattr -cr /Applications/ClipboardManager.app` on first install.
 ---
 
 *Last Updated: 2026-08-27*
-*Project Version: 1.0*
+*Project Version: 2.0*

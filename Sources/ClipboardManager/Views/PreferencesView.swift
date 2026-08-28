@@ -4,6 +4,12 @@ import os.log
 
 private let logger = Logger(subsystem: "com.clipboardmanager", category: "PreferencesView")
 
+// Every tab uses SwiftUI's grouped Form - the same grouped-row layout System Settings uses.
+// This replaces a hand-rolled `PreferenceSection` card that wrapped each group in a tinted
+// background with its own icon and headline, so a section holding a single checkbox rendered
+// as a large coloured box containing one checkbox. Explanatory captions are kept only where
+// they say something the control's own label doesn't.
+
 struct PreferencesView: View {
     @EnvironmentObject var appState: AppState
     @State private var selectedTab = 0
@@ -11,105 +17,69 @@ struct PreferencesView: View {
     var body: some View {
         TabView(selection: $selectedTab) {
             GeneralPreferencesView()
-                .environmentObject(appState)
-                .tabItem {
-                    Label("General", systemImage: "slider.horizontal.3")
-                }
+                .tabItem { Label("General", systemImage: "gearshape") }
                 .tag(0)
 
             HistoryPreferencesView()
                 .environmentObject(appState)
-                .tabItem {
-                    Label("History", systemImage: "clock")
-                }
+                .tabItem { Label("History", systemImage: "clock") }
                 .tag(1)
 
             AppearancePreferencesView()
-                .environmentObject(appState)
-                .tabItem {
-                    Label("Appearance", systemImage: "paintbrush")
-                }
+                .tabItem { Label("Appearance", systemImage: "paintbrush") }
                 .tag(2)
 
             SnippetsPreferencesView()
                 .environmentObject(appState)
-                .tabItem {
-                    Label("Snippets", systemImage: "text.badge.plus")
-                }
+                .tabItem { Label("Snippets", systemImage: "text.badge.plus") }
                 .tag(3)
 
             AdvancedPreferencesView()
                 .environmentObject(appState)
-                .tabItem {
-                    Label("Advanced", systemImage: "wand.and.stars")
-                }
+                .tabItem { Label("Advanced", systemImage: "wand.and.stars") }
                 .tag(4)
         }
-        .frame(minWidth: 700, idealWidth: 800, maxWidth: 1000, minHeight: 500, idealHeight: 650, maxHeight: 850)
+        .frame(minWidth: 540, idealWidth: 620, minHeight: 400, idealHeight: 560)
     }
 }
 
-// MARK: - General Preferences Tab
+// MARK: - General
 
 struct GeneralPreferencesView: View {
-    @EnvironmentObject var appState: AppState
     @AppStorage(Preferences.launchAtLogin) private var launchAtLogin: Bool = false
     @AppStorage(Preferences.autoClearOnLogout) private var autoClearOnLogout: Bool = false
     @AppStorage(Preferences.enableNotifications) private var enableNotifications: Bool = true
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                // Startup Section
-                PreferenceSection(title: "Startup", icon: "power") {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Toggle("Launch at login", isOn: $launchAtLogin)
-                            .onChange(of: launchAtLogin) { newValue in
-                                setLaunchAtLogin(newValue)
-                            }
-
-                        Text("Automatically start Clipboard Manager when you log in.")
-                            .font(.caption2)
-                            .foregroundColor(.secondary)
+        Form {
+            Section("Startup") {
+                Toggle("Launch at login", isOn: $launchAtLogin)
+                    .onChange(of: launchAtLogin) { newValue in
+                        setLaunchAtLogin(newValue)
                     }
-                }
-
-                // Privacy Section
-                PreferenceSection(title: "Privacy", icon: "lock.shield") {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Toggle("Clear history on logout", isOn: $autoClearOnLogout)
-
-                        Text("Automatically wipe all clipboard history when you log out of macOS.")
-                            .font(.caption2)
-                            .foregroundColor(.secondary)
-                    }
-                }
-
-                // Notifications Section
-                PreferenceSection(title: "Notifications", icon: "bell.badge") {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Toggle("Enable notifications", isOn: $enableNotifications)
-
-                        Text("Display system notifications when clipboard items are captured.")
-                            .font(.caption2)
-                            .foregroundColor(.secondary)
-                    }
-                }
-
-                // Keyboard Shortcuts Section
-                PreferenceSection(title: "Keyboard Shortcuts", icon: "command") {
-                    VStack(alignment: .leading, spacing: 10) {
-                        KeyboardShortcutRow(label: "Open search window", shortcut: "⌘⇧Space")
-                        KeyboardShortcutRow(label: "Quick paste", shortcut: "⌘1 - ⌘9")
-
-                        Text("Keyboard shortcuts are global and work in any application.")
-                            .font(.caption2)
-                            .foregroundColor(.secondary)
-                    }
-                }
             }
-            .padding(20)
+
+            Section("Privacy") {
+                Toggle("Clear history on logout", isOn: $autoClearOnLogout)
+                FormCaption("Unpinned clips are wiped when you log out or shut down.")
+            }
+
+            Section("Notifications") {
+                Toggle("Notify when a clip is captured", isOn: $enableNotifications)
+            }
+
+            // The single home for the shortcut reference - it used to be duplicated in the
+            // About window with different styling.
+            Section("Keyboard Shortcuts") {
+                ShortcutRow("Open clipboard history", "⌘⇧Space")
+                ShortcutRow("Copy recent item from menu", "⌘1 – ⌘9")
+                ShortcutRow("Navigate search results", "↑ ↓")
+                ShortcutRow("Copy selected and close", "↵")
+                ShortcutRow("Close search", "esc")
+                FormCaption("The first two work globally, in any application.")
+            }
         }
+        .formStyle(.grouped)
     }
 
     private func setLaunchAtLogin(_ enable: Bool) {
@@ -125,7 +95,7 @@ struct GeneralPreferencesView: View {
     }
 }
 
-// MARK: - History Preferences Tab
+// MARK: - History
 
 struct HistoryPreferencesView: View {
     @EnvironmentObject var appState: AppState
@@ -136,182 +106,126 @@ struct HistoryPreferencesView: View {
     @AppStorage(Preferences.ocrEnabled) private var ocrEnabled: Bool = true
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                // Retention Period Section
-                PreferenceSection(title: "Storage", icon: "internaldrive") {
-                    VStack(alignment: .leading, spacing: 12) {
-                        SliderWithLabel(
-                            label: "Keep clipboard history for",
-                            value: $cleanupDays,
-                            in: 1...365,
-                            step: 1,
-                            suffix: "days"
-                        )
+        Form {
+            Section("Storage") {
+                ValueSlider(
+                    "Keep history for",
+                    value: $cleanupDays,
+                    in: 1...365,
+                    step: 1,
+                    readout: "\(Int(cleanupDays)) days"
+                )
+                FormCaption("Older clips are removed automatically.")
+            }
 
-                        Text("Clips older than this will be automatically removed.")
-                            .font(.caption2)
-                            .foregroundColor(.secondary)
-                    }
-                }
-
-                // Menu Bar Display Section
-                PreferenceSection(title: "Menu Bar Display", icon: "menubar.rectangle") {
-                    VStack(alignment: .leading, spacing: 12) {
-                        SliderWithLabel(
-                            label: "Show in menu bar",
-                            value: $maxClips,
-                            in: 5...50,
-                            step: 1,
-                            suffix: "clips"
-                        )
-                        .onChange(of: maxClips) { _ in
-                            appState.loadClips()
-                        }
-
-                        Text("Number of recent clips to display in the menu bar.")
-                            .font(.caption2)
-                            .foregroundColor(.secondary)
-                    }
-                }
-
-                // OCR Section
-                PreferenceSection(title: "Image Recognition", icon: "doc.text.viewfinder") {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Toggle("Extract text from images (OCR)", isOn: $ocrEnabled)
-
-                        Text("Use optical character recognition to extract and search text from captured images.")
-                            .font(.caption2)
-                            .foregroundColor(.secondary)
-
-                        Text("⚠️ OCR processing may slow down image capture on older Macs.", comment: "Warning")
-                            .font(.caption2)
-                            .foregroundColor(.orange)
-                    }
-                }
-
-                // Size Limits Section
-                PreferenceSection(title: "Size Limits", icon: "ruler") {
-                    VStack(alignment: .leading, spacing: 14) {
-                        VStack(alignment: .leading, spacing: 12) {
-                            SliderWithLabel(
-                                label: "Maximum text size",
-                                value: $maxClipSize,
-                                in: 10...1000,
-                                step: 10,
-                                suffix: "KB"
-                            )
-
-                            Text(
-                                """
-                                Text clips larger than this will be skipped. \
-                                (Approximately \(estimatePages(Int(maxClipSize))) pages)
-                                """
-                            )
-                            .font(.caption2)
-                            .foregroundColor(.secondary)
-                        }
-
-                        Divider()
-
-                        VStack(alignment: .leading, spacing: 12) {
-                            SliderWithLabel(
-                                label: "Maximum image size",
-                                value: $maxImageSize,
-                                in: 100...10240,
-                                step: 256,
-                                suffix: formatImageSize(Int(maxImageSize))
-                            )
-
-                            Text("Images larger than this will be skipped.")
-                                .font(.caption2)
-                                .foregroundColor(.secondary)
-                        }
-                    }
+            Section("Menu Bar") {
+                ValueSlider(
+                    "Show in menu",
+                    value: $maxClips,
+                    in: 5...50,
+                    step: 1,
+                    readout: "\(Int(maxClips)) clips"
+                )
+                .onChange(of: maxClips) { _ in
+                    appState.loadClips()
                 }
             }
-            .padding(20)
+
+            Section("Size Limits") {
+                ValueSlider(
+                    "Maximum text",
+                    value: $maxClipSize,
+                    in: 10...1000,
+                    step: 10,
+                    readout: "\(Int(maxClipSize)) KB"
+                )
+                FormCaption("Roughly \(estimatePages(Int(maxClipSize))). Larger text clips are skipped.")
+
+                ValueSlider(
+                    "Maximum image",
+                    value: $maxImageSize,
+                    in: 100...10240,
+                    step: 256,
+                    readout: formatImageSize(Int(maxImageSize))
+                )
+                FormCaption("Larger images are skipped.")
+            }
+
+            Section("Image Recognition") {
+                Toggle("Extract text from images (OCR)", isOn: $ocrEnabled)
+                FormCaption("Makes image contents searchable. May slow capture on older Macs.")
+            }
         }
+        .formStyle(.grouped)
     }
 
-    private func estimatePages(_ kb: Int) -> String {
-        let approximateChars = kb * 1024 / 2  // Rough estimate: 2 bytes per char
-        let wordsPerPage = 250
-        let charsPerWord = 5
-        let pages = max(1, approximateChars / (wordsPerPage * charsPerWord))
-        return pages > 1 ? "\(pages) pages" : "< 1 page"
+    private func estimatePages(_ kilobytes: Int) -> String {
+        let approximateChars = kilobytes * 1024 / 2  // Rough estimate: 2 bytes per char
+        let pages = max(1, approximateChars / (250 * 5))  // 250 words/page, 5 chars/word
+        return pages > 1 ? "\(pages) pages" : "under a page"
     }
 
-    private func formatImageSize(_ kb: Int) -> String {
-        if kb >= 1024 {
-            return String(format: "%.1f MB", Double(kb) / 1024.0)
-        }
-        return "\(kb)"
+    private func formatImageSize(_ kilobytes: Int) -> String {
+        kilobytes >= 1024
+            ? String(format: "%.1f MB", Double(kilobytes) / 1024.0)
+            : "\(kilobytes) KB"
     }
 }
 
-// MARK: - Appearance Preferences Tab
+// MARK: - Appearance
 
 struct AppearancePreferencesView: View {
-    @AppStorage(Preferences.previewLength) private var previewLength: Double = 150
+    @AppStorage(Preferences.previewLength) private var previewLength: Double = 60
     @AppStorage(Preferences.showTypeIcons) private var showTypeIcons: Bool = true
     @AppStorage(Preferences.compactMode) private var compactMode: Bool = false
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                // Menu Display Section
-                PreferenceSection(title: "Menu Display", icon: "list.bullet") {
-                    VStack(alignment: .leading, spacing: 12) {
-                        Toggle("Show content type icons", isOn: $showTypeIcons)
-
-                        Text("Display icons indicating text, image, or RTF content type.")
-                            .font(.caption2)
-                            .foregroundColor(.secondary)
-
-                        Divider()
-                            .padding(.vertical, 4)
-
-                        Toggle("Compact mode", isOn: $compactMode)
-
-                        Text("Reduce spacing between menu items for a denser layout.")
-                            .font(.caption2)
-                            .foregroundColor(.secondary)
-                    }
-                }
-
-                // Preview Section
-                PreferenceSection(title: "Text Preview", icon: "text.alignleft") {
-                    VStack(alignment: .leading, spacing: 12) {
-                        SliderWithLabel(
-                            label: "Preview length",
-                            value: $previewLength,
-                            in: 50...300,
-                            step: 25,
-                            suffix: "characters"
-                        )
-
-                        Text("Maximum characters to display in menu item previews.")
-                            .font(.caption2)
-                            .foregroundColor(.secondary)
-                    }
-                }
-
-                // Tips Section
-                PreferenceSection(title: "Tips", icon: "lightbulb") {
-                    VStack(alignment: .leading, spacing: 10) {
-                        TipRow(icon: "calendar", text: "The menu bar displays clipboard history grouped by date")
-                        TipRow(icon: "pin.fill", text: "Pinned items always stay at the top")
-                        TipRow(icon: "hand.point.right.fill", text: "Right-click any item for more options")
-                    }
-                }
+        Form {
+            Section("Menu Display") {
+                Toggle("Show content type icons", isOn: $showTypeIcons)
+                Toggle("Compact spacing", isOn: $compactMode)
             }
-            .padding(20)
+
+            Section("Preview") {
+                ValueSlider(
+                    "Preview length",
+                    value: $previewLength,
+                    in: Preferences.previewLengthRange,
+                    step: 10,
+                    readout: "\(Int(previewLength)) chars"
+                )
+                FormCaption("Applies to the menu bar list and to search results.")
+            }
+        }
+        .formStyle(.grouped)
+    }
+}
+
+// MARK: - Snippets
+
+struct SnippetsPreferencesView: View {
+    @EnvironmentObject var appState: AppState
+    @AppStorage(Preferences.snippetsEnabled) private var snippetsEnabled: Bool = true
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Toggle("Expand snippet triggers on copy", isOn: $snippetsEnabled)
+                Spacer()
+            }
+            .padding(.horizontal, 20)
+            .padding(.vertical, 10)
+
+            Divider()
+
+            SnippetsView(appState: appState)
+                .disabled(!snippetsEnabled)
+                .opacity(snippetsEnabled ? 1 : 0.5)
         }
     }
 }
 
-// MARK: - Advanced Preferences Tab
+// MARK: - Advanced
 
 struct AdvancedPreferencesView: View {
     @EnvironmentObject var appState: AppState
@@ -319,7 +233,7 @@ struct AdvancedPreferencesView: View {
     @State private var textCount: Int = 0
     @State private var imageCount: Int = 0
     @State private var pinnedCount: Int = 0
-    @State private var databaseSize: String = "Calculating..."
+    @State private var databaseSize: String = "Calculating…"
     @State private var showingClear24Confirmation = false
     @State private var showingClearAllConfirmation = false
     @State private var showingSuccessMessage = false
@@ -328,132 +242,49 @@ struct AdvancedPreferencesView: View {
     @State private var showingImportPanel = false
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                // Database Statistics Section
-                PreferenceSection(title: "Database Statistics", icon: "cylinder") {
-                    VStack(alignment: .leading, spacing: 16) {
-                        // Stats Grid
-                        VStack(alignment: .leading, spacing: 12) {
-                            HStack(spacing: 20) {
-                                StatCard(label: "Total", value: "\(totalClips)", icon: "doc.on.doc")
-                                StatCard(label: "Text", value: "\(textCount)", icon: "doc.text")
-                            }
-                            HStack(spacing: 20) {
-                                StatCard(label: "Images", value: "\(imageCount)", icon: "photo")
-                                StatCard(label: "Pinned", value: "\(pinnedCount)", icon: "pin.fill")
-                            }
-                        }
-
-                        Divider()
-
-                        // Database Info
-                        VStack(alignment: .leading, spacing: 8) {
-                            HStack {
-                                Text("Database size")
-                                    .font(.body)
-                                Spacer()
-                                Text(databaseSize)
-                                    .font(.system(.body, design: .monospaced))
-                                    .fontWeight(.semibold)
-                            }
-
-                            HStack {
-                                Text("Location")
-                                    .font(.body)
-                                Spacer()
-                                Text("~/.clipboard_history.db")
-                                    .font(.system(.caption2, design: .monospaced))
-                                    .foregroundColor(.secondary)
-                            }
-
-                            Button(action: revealDatabaseInFinder) {
-                                Label("Reveal in Finder", systemImage: "folder")
-                                    .font(.caption)
-                            }
-                            .buttonStyle(.bordered)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                        }
-                    }
-                }
-
-                // Backup & Restore Section
-                PreferenceSection(title: "Backup & Restore", icon: "arrow.triangle.2.circlepath") {
-                    VStack(alignment: .leading, spacing: 12) {
-                        HStack(spacing: 12) {
-                            Button(action: { showingExportPanel = true }) {
-                                Label("Export", systemImage: "square.and.arrow.up")
-                                    .frame(maxWidth: .infinity)
-                            }
-                            .buttonStyle(.bordered)
-
-                            Button(action: { showingImportPanel = true }) {
-                                Label("Import", systemImage: "square.and.arrow.down")
-                                    .frame(maxWidth: .infinity)
-                            }
-                            .buttonStyle(.bordered)
-                        }
-
-                        Text("Back up your preferences or transfer to another Mac.")
-                            .font(.caption2)
-                            .foregroundColor(.secondary)
-                    }
-                }
-
-                // Clear History Section
-                PreferenceSection(title: "Danger Zone", icon: "exclamationmark.triangle", isDanger: true) {
-                    VStack(alignment: .leading, spacing: 12) {
-                        HStack(spacing: 12) {
-                            Button(action: { showingClear24Confirmation = true }) {
-                                Label("Clear 24h", systemImage: "clock")
-                                    .frame(maxWidth: .infinity)
-                            }
-                            .buttonStyle(.bordered)
-                            .tint(.orange)
-
-                            Button(action: { showingClearAllConfirmation = true }) {
-                                Label("Clear All", systemImage: "trash.fill")
-                                    .frame(maxWidth: .infinity)
-                            }
-                            .buttonStyle(.bordered)
-                            .tint(.red)
-                        }
-
-                        Text("Pinned items will be preserved. This action cannot be undone.")
-                            .font(.caption2)
-                            .foregroundColor(.secondary)
-                    }
-                }
-
-                // Security Section
-                PreferenceSection(title: "Security Status", icon: "lock.shield") {
-                    VStack(alignment: .leading, spacing: 12) {
-                        SecurityFeatureRow(
-                            icon: "checkmark.shield.fill",
-                            color: .green,
-                            title: "AES-256-GCM Encryption",
-                            subtitle: "Military-grade encryption enabled"
-                        )
-
-                        SecurityFeatureRow(
-                            icon: "key.fill",
-                            color: .blue,
-                            title: "Keychain Protection",
-                            subtitle: "Encryption key secured in system keychain"
-                        )
-                    }
+        Form {
+            Section("Database") {
+                LabeledContent("Clips stored", value: "\(totalClips)")
+                LabeledContent("Text", value: "\(textCount)")
+                LabeledContent("Images", value: "\(imageCount)")
+                LabeledContent("Pinned", value: "\(pinnedCount)")
+                LabeledContent("Size on disk", value: databaseSize)
+                LabeledContent("Location") {
+                    Button("Reveal in Finder", action: revealDatabaseInFinder)
                 }
             }
-            .padding(20)
+
+            Section("Security") {
+                LabeledContent("Encryption", value: "AES-256-GCM")
+                LabeledContent("Key storage", value: "System Keychain")
+                FormCaption("Clip contents, OCR text, images and snippet bodies are all encrypted at rest.")
+            }
+
+            Section("Settings Backup") {
+                LabeledContent("Preferences file") {
+                    HStack {
+                        Button("Export…") { showingExportPanel = true }
+                        Button("Import…") { showingImportPanel = true }
+                    }
+                }
+                FormCaption("Backs up preferences only, not your clipboard history.")
+            }
+
+            Section("Clear History") {
+                LabeledContent("Delete clips") {
+                    HStack {
+                        Button("Last 24 Hours") { showingClear24Confirmation = true }
+                        Button("All") { showingClearAllConfirmation = true }
+                    }
+                }
+                FormCaption("Pinned clips are always preserved. This cannot be undone.")
+            }
         }
-        .onAppear {
-            loadStats()
-        }
+        .formStyle(.grouped)
+        .onAppear(perform: loadStats)
         .alert("Clear Last 24 Hours?", isPresented: $showingClear24Confirmation) {
             Button("Cancel", role: .cancel) { }
-            Button("Clear", role: .destructive) {
-                clearLast24Hours()
-            }
+            Button("Clear", role: .destructive, action: clearLast24Hours)
         } message: {
             Text(
                 """
@@ -464,9 +295,7 @@ struct AdvancedPreferencesView: View {
         }
         .alert("Clear All Clipboard History?", isPresented: $showingClearAllConfirmation) {
             Button("Cancel", role: .cancel) { }
-            Button("Delete All", role: .destructive) {
-                clearAllHistory()
-            }
+            Button("Delete All", role: .destructive, action: clearAllHistory)
         } message: {
             Text(
                 """
@@ -544,25 +373,23 @@ struct AdvancedPreferencesView: View {
     private func handleExportResult(_ result: Result<URL, Error>) {
         switch result {
         case .success:
-            successMessage = "Settings exported successfully!"
-            showingSuccessMessage = true
+            successMessage = "Settings exported successfully."
         case .failure(let error):
             successMessage = "Export failed: \(error.localizedDescription)"
-            showingSuccessMessage = true
         }
+        showingSuccessMessage = true
     }
 
     private func handleImportResult(_ result: Result<URL, Error>) {
         switch result {
         case .success(let url):
-            if importSettings(from: url) {
-                successMessage = "Settings imported successfully! Restart the app to apply changes."
-                showingSuccessMessage = true
-            }
+            successMessage = importSettings(from: url)
+                ? "Settings imported successfully."
+                : "Could not read that settings file."
         case .failure(let error):
             successMessage = "Import failed: \(error.localizedDescription)"
-            showingSuccessMessage = true
         }
+        showingSuccessMessage = true
     }
 
     private func importSettings(from url: URL) -> Bool {
@@ -581,11 +408,7 @@ struct AdvancedPreferencesView: View {
                 UserDefaults.standard.set(coerced, forKey: key)
             }
 
-            // Reload UI by resetting appearance and reloading clips
-            DispatchQueue.main.async {
-                appState.loadClips()
-            }
-
+            appState.loadClips()
             return true
         } catch {
             return false
@@ -593,187 +416,89 @@ struct AdvancedPreferencesView: View {
     }
 }
 
-// MARK: - Helper Views
+// MARK: - Shared form components
 
-struct PreferenceSection<Content: View>: View {
-    let title: String
-    let icon: String
-    let content: Content
-    var isDanger: Bool = false
+/// Secondary explanatory text inside a Form section. Used only where it adds something the
+/// control's own label doesn't already say.
+struct FormCaption: View {
+    private let text: String
 
-    init(title: String, icon: String, isDanger: Bool = false, @ViewBuilder content: () -> Content) {
-        self.title = title
-        self.icon = icon
-        self.isDanger = isDanger
-        self.content = content()
+    init(_ text: String) {
+        self.text = text
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Label(title, systemImage: icon)
-                .font(.headline)
-                .foregroundColor(.primary)
-
-            content
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(14)
-        .background(
-            isDanger
-                ? Color.red.opacity(0.08)
-                : Color.gray.opacity(0.05)
-        )
-        .cornerRadius(8)
+        Text(text)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
     }
 }
 
-struct StatCard: View {
-    let label: String
-    let value: String
-    let icon: String
-
-    var body: some View {
-        VStack(alignment: .center, spacing: 8) {
-            Image(systemName: icon)
-                .font(.system(size: 20))
-                .foregroundColor(.blue)
-
-            Text(value)
-                .font(.system(size: 20, weight: .bold, design: .monospaced))
-                .foregroundColor(.primary)
-
-            Text(label)
-                .font(.caption2)
-                .foregroundColor(.secondary)
-        }
-        .frame(maxWidth: .infinity)
-        .padding(12)
-        .background(Color.blue.opacity(0.08))
-        .cornerRadius(8)
-    }
-}
-
-struct SecurityFeatureRow: View {
-    let icon: String
-    let color: Color
-    let title: String
-    let subtitle: String
-
-    var body: some View {
-        HStack(alignment: .top, spacing: 12) {
-            Image(systemName: icon)
-                .font(.system(size: 16))
-                .foregroundColor(color)
-                .frame(width: 24, alignment: .center)
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title)
-                    .font(.body)
-                    .fontWeight(.semibold)
-                Text(subtitle)
-                    .font(.caption2)
-                    .foregroundColor(.secondary)
-            }
-            Spacer()
-        }
-    }
-}
-
-struct TipRow: View {
-    let icon: String
-    let text: String
-
-    var body: some View {
-        HStack(alignment: .top, spacing: 12) {
-            Image(systemName: icon)
-                .foregroundColor(.blue)
-                .frame(width: 20)
-            Text(text)
-                .font(.caption)
-                .foregroundColor(.secondary)
-            Spacer()
-        }
-    }
-}
-
-struct SliderWithLabel: View {
-    let label: String
-    @Binding var value: Double
-    let range: ClosedRange<Double>
-    let step: Double
-    let suffix: String
+/// A slider with its current value beside it, laid out as a standard labelled form row.
+struct ValueSlider: View {
+    private let label: String
+    @Binding private var value: Double
+    private let range: ClosedRange<Double>
+    private let step: Double
+    private let readout: String
 
     init(
-        label: String,
+        _ label: String,
         value: Binding<Double>,
         in range: ClosedRange<Double>,
         step: Double = 1,
-        suffix: String
+        readout: String
     ) {
         self.label = label
         self._value = value
         self.range = range
         self.step = step
-        self.suffix = suffix
+        self.readout = readout
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Text(label)
-                    .font(.body)
-                Spacer()
-                HStack(spacing: 4) {
-                    Text("\(Int(value))")
-                        .font(.system(.body, design: .monospaced))
-                        .fontWeight(.semibold)
-                    Text(suffix)
-                        .font(.caption)
-                        .foregroundColor(.secondary)
+        LabeledContent {
+            HStack(spacing: 10) {
+                Slider(value: $value, in: range, step: step) {
+                    Text(label)
                 }
-            }
+                .labelsHidden()
 
-            Slider(value: $value, in: range, step: step) {
-                Text(label)
+                Text(readout)
+                    .font(.callout)
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary)
+                    .frame(minWidth: 66, alignment: .trailing)
             }
-            .tint(.blue)
+        } label: {
+            Text(label)
         }
     }
 }
 
-struct KeyboardShortcutRow: View {
-    let label: String
-    let shortcut: String
+/// A read-only shortcut reference row. The key cap uses a semantic fill so it stays legible
+/// in both themes - the previous version hardcoded `Color.black.opacity(0.6)`, which rendered
+/// as a black blob against a dark background.
+struct ShortcutRow: View {
+    private let action: String
+    private let keys: String
 
-    var body: some View {
-        HStack {
-            Text(label)
-                .font(.body)
-            Spacer()
-            Text(shortcut)
-                .font(.system(.body, design: .monospaced))
-                .foregroundColor(.white)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
-                .background(Color.black.opacity(0.6))
-                .cornerRadius(6)
-        }
+    init(_ action: String, _ keys: String) {
+        self.action = action
+        self.keys = keys
     }
-}
-
-struct StatRow: View {
-    let label: String
-    let value: String
 
     var body: some View {
-        HStack {
-            Text(label)
-                .font(.body)
-            Spacer()
-            Text(value)
-                .font(.system(.body, design: .monospaced))
-                .foregroundColor(.primary)
-                .fontWeight(.semibold)
+        LabeledContent {
+            Text(keys)
+                .font(.callout)
+                .monospaced()
+                .padding(.horizontal, 8)
+                .padding(.vertical, 3)
+                .background(.quaternary, in: RoundedRectangle(cornerRadius: 5))
+        } label: {
+            Text(action)
         }
     }
 }
