@@ -141,11 +141,17 @@ actor ClipboardMonitor {
            let attributedString = NSAttributedString(rtf: rtfData, documentAttributes: nil) {
             let plainText = attributedString.string
 
-            // Check size limit (use text size, not RTF data size)
+            // Bound both the visible text and the representation stored in the database. RTF
+            // can contain a small amount of text but a very large formatting payload.
             let textSizeBytes = plainText.utf8.count
-            if textSizeBytes > maxClipSizeBytes {
+            let rtfSizeBytes = rtfData.count
+            if textSizeBytes > maxClipSizeBytes || rtfSizeBytes > maxClipSizeBytes {
                 // Skip this clip - too large
-                showSizeNotification(type: "Text", actualSize: textSizeBytes, limit: maxClipSizeBytes)
+                showSizeNotification(
+                    type: "Rich text",
+                    actualSize: max(textSizeBytes, rtfSizeBytes),
+                    limit: maxClipSizeBytes
+                )
                 return
             }
 
@@ -218,6 +224,8 @@ actor ClipboardMonitor {
     }
 
     private func showSizeNotification(type: String, actualSize: Int, limit: Int) {
+        guard Preferences.areNotificationsEnabled else { return }
+
         Task { @MainActor in
             let notification = UNMutableNotificationContent()
             notification.title = "Clip Too Large"

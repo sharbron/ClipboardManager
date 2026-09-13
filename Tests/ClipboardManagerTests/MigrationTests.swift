@@ -99,6 +99,35 @@ final class MigrationTests: XCTestCase {
         XCTAssertTrue(cipher.isEncrypted(storedBlobData), "Stored blob should be ciphertext")
     }
 
+    func testInitializationRepairsLegacyTableBeforeCreatingIndexes() async throws {
+        // This is the oldest supported shape: the index columns added in later releases do not
+        // exist yet. Initialization must succeed so prepare() can finish the data migration.
+        do {
+            let connection = try Connection(databasePath)
+            try connection.run("""
+                CREATE TABLE clips (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp TEXT,
+                    content_type TEXT,
+                    content TEXT
+                )
+            """)
+        }
+
+        let database = ClipboardDatabase(path: databasePath)
+
+        XCTAssertTrue(database.isInitialized, database.initializationError ?? "Unknown initialization error")
+        await database.prepare()
+
+        let connection = try Connection(databasePath)
+        let columns = try connection.prepare("PRAGMA table_info(clips)").compactMap { row in
+            row[1] as? String
+        }
+        XCTAssertTrue(columns.contains("is_pinned"))
+        XCTAssertTrue(columns.contains("source_app"))
+        XCTAssertTrue(columns.contains("extracted_text"))
+    }
+
     func testPrepareDropsLegacyPlaintextSearchIndex() async throws {
         do {
             let connection = try Connection(databasePath)

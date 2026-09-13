@@ -123,6 +123,11 @@ actor ClipboardDatabase {
             table.column(extractedText)
         })
 
+        // Existing installs can have a clips table that predates some of the columns used by
+        // the indexes below. Repair the table before creating those indexes; otherwise opening
+        // the database fails before prepare() has a chance to run the migration.
+        try addMissingColumns(connection)
+
         try connection.run(clips.createIndex(timestamp, ifNotExists: true))
         try connection.run(clips.createIndex(isPinned, ifNotExists: true))
         try connection.run(clips.createIndex(contentType, ifNotExists: true))
@@ -152,7 +157,7 @@ actor ClipboardDatabase {
         }
     }
 
-    private func addMissingColumns(_ connection: Connection) throws {
+    private nonisolated func addMissingColumns(_ connection: Connection) throws {
         let tableInfo = try connection.prepare("PRAGMA table_info(clips)")
         var columns = Set<String>()
         for row in tableInfo {

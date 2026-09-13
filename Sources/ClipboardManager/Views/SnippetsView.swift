@@ -125,7 +125,7 @@ struct SnippetsView: View {
             AddSnippetView(appState: appState, isPresented: $showingAddSheet)
         }
         .sheet(item: $editingSnippet) { snippet in
-            EditSnippetView(snippet: snippet, appState: appState, isPresented: .constant(true))
+            EditSnippetView(snippet: snippet, appState: appState)
         }
         .sheet(isPresented: $showingImportExport) {
             ImportExportView(appState: appState, isPresented: $showingImportExport)
@@ -290,18 +290,17 @@ struct AddSnippetView: View {
 }
 
 struct EditSnippetView: View {
+    @Environment(\.dismiss) private var dismiss
     let snippet: Snippet
     let appState: AppState
-    @Binding var isPresented: Bool
 
     @State private var trigger: String
     @State private var description: String
     @State private var content: String
 
-    init(snippet: Snippet, appState: AppState, isPresented: Binding<Bool>) {
+    init(snippet: Snippet, appState: AppState) {
         self.snippet = snippet
         self.appState = appState
-        self._isPresented = isPresented
         self._trigger = State(initialValue: snippet.trigger)
         self._description = State(initialValue: snippet.description)
         self._content = State(initialValue: snippet.content)
@@ -335,7 +334,7 @@ struct EditSnippetView: View {
 
             HStack {
                 Button("Cancel") {
-                    isPresented = false
+                    dismiss()
                 }
                 .keyboardShortcut(.escape)
 
@@ -343,7 +342,7 @@ struct EditSnippetView: View {
 
                 Button("Save") {
                     appState.saveSnippet(trigger: trigger, content: content, description: description)
-                    isPresented = false
+                    dismiss()
                 }
                 .keyboardShortcut(.return)
                 .disabled(description.isEmpty || content.isEmpty)
