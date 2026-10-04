@@ -43,16 +43,18 @@ struct MenuBarView: View {
             }
             .keyboardShortcut("f", modifiers: [.command])
 
+            Divider()
+
+            Button("About") {
+                WindowManager.shared.openAbout(appState: appState)
+            }
+
             Button("Preferences...") {
                 WindowManager.shared.openPreferences(appState: appState)
             }
             .keyboardShortcut(",", modifiers: [.command])
 
             Divider()
-
-            Button("About") {
-                WindowManager.shared.openAbout(appState: appState)
-            }
 
             Button("Quit") {
                 NSApplication.shared.terminate(nil)
@@ -115,9 +117,6 @@ struct ClipMenuItemView: View {
     @AppStorage(Preferences.compactMode) private var compactMode: Bool = false
     @AppStorage(Preferences.previewLength) private var previewLength: Double = 60
 
-    /// Widest a menu row may render. Roughly the width of a comfortable menu on any display.
-    private static let maximumRowWidth: CGFloat = 380
-
     var body: some View {
         menuItem
             .modifier(QuickAccessShortcut(shortcut: shortcut))
@@ -169,10 +168,6 @@ struct ClipMenuItemView: View {
                         .font(.system(size: 10))
                 }
             }
-            // A native menu sizes itself to its widest item, so an unconstrained row lets one
-            // long clip stretch the whole menu across the screen. The preview is already
-            // length-capped; this bounds the rendered width regardless.
-            .frame(maxWidth: Self.maximumRowWidth, alignment: .leading)
         } primaryAction: {
             Task {
                 await appState.copyToClipboard(clip: clip)
@@ -209,7 +204,9 @@ struct ClipMenuItemView: View {
     }
 
     private var previewText: String {
-        clip.preview(maxLength: Int(previewLength))
+        // A native menu sizes itself to its widest item and ignores SwiftUI frames, so the
+        // title itself has to be cut to width or one long clip stretches the whole menu.
+        MenuTitle.fitted(clip.preview(maxLength: Int(previewLength)))
     }
 }
 
