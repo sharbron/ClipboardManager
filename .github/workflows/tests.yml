@@ -79,7 +79,7 @@ jobs:
     - name: Create App Bundle
       run: |
         chmod +x create_app.sh
-        ./create_app.sh
+        ./create_app.sh --no-install
 
     - name: Verify App Bundle
       run: |

@@ -53,7 +53,8 @@ swift build -c release
 ./create_app.sh
 ```
 
-This creates `ClipboardManager.app` ready to install.
+This creates and signs `ClipboardManager.app`, then installs it to `/Applications`
+(use `./create_app.sh --no-install` to skip the install).
 
 ## Usage
 
