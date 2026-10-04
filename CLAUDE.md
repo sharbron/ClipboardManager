@@ -241,7 +241,7 @@ directly, so the UI and the code that consumes a setting can't drift apart.
 | `maxImageSize` | Double | 2048 | Max image clip size in KB |
 | `ocrEnabled` | Bool | true | Extract text from captured images |
 | `snippetsEnabled` | Bool | true | Enable snippet trigger expansion |
-| `previewLength` | Double | 150 | Max characters in menu/list previews |
+| `previewLength` | Double | 60 | Max characters in menu/list previews (clamped to 30-120) |
 | `showTypeIcons` | Bool | true | Show content-type icons in menu and search |
 | `compactMode` | Bool | false | Tighter row spacing in menu and search |
 
