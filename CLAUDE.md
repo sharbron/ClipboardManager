@@ -182,15 +182,37 @@ func testSaveClip_WithValidContent_StoresEncrypted() async throws {
 ### Build Commands
 
 ```bash
-# Using build script (recommended)
+# Build, bundle, sign, and install to /Applications (recommended)
 ./create_app.sh
+
+# Build and bundle without installing
+./create_app.sh --no-install     # or: SKIP_INSTALL=1 ./create_app.sh
+
+# Install somewhere other than /Applications
+INSTALL_DIR=~/Applications ./create_app.sh
+
+# Override the bundle version (e.g. from a release tag) before signing
+APP_VERSION=2.1 ./create_app.sh --no-install
 
 # Manual build
 swift build -c release
 
-# Create DMG for distribution
+# Create DMG for distribution (version is read from the built bundle)
 ./create_dmg.sh
 ```
+
+The repo build and the installed copy share one identifier (`com.clipboard.manager`), so
+macOS resolves a launch from Spotlight, the Dock or a login item to the copy in
+`/Applications`. That is why `create_app.sh` installs on every build. The install step quits
+any running copy (and relaunches it afterwards), stages the copy and swaps it in with
+`ditto`, refuses to replace a `ClipboardManager.app` with a different bundle identifier, and
+leaves the bundle in place if the install directory is not writable.
+
+`create_app.sh` signs automatically, preferring `Developer ID Application`, then
+`Apple Development`, then an ad-hoc signature. Override with `SIGN_IDENTITY="..."`. A real
+certificate keeps the Accessibility grant (which the ⌘⇧Space hotkey depends on) across
+rebuilds; an ad-hoc signature's designated requirement is the code hash, so every ad-hoc
+build loses it.
 
 ### Build Output
 - **App Bundle**: `ClipboardManager.app` (~600 KB)
@@ -342,7 +364,11 @@ leaks -atExit -- .build/release/ClipboardManager
 ### Unsigned Distribution (Current)
 1. Build with `./create_app.sh`
 2. Clear quarantine: `xattr -cr ClipboardManager.app`
-3. Ad-hoc code signature applied automatically
+
+Without a Developer ID certificate the bundle is signed with a development certificate or
+ad-hoc, neither of which Gatekeeper accepts for downloaded apps. Locally built copies carry
+no quarantine attribute, so they launch without complaint; a bundle that has travelled
+through a download or a DMG will need the `xattr -cr` above.
 
 Users must run: `xattr -cr /Applications/ClipboardManager.app` on first install.
 
