@@ -1,144 +1,88 @@
 import SwiftUI
 
+/// Standard macOS About panel: identity and credits only.
+///
+/// The keyboard shortcut reference that used to live here now sits in Preferences > General,
+/// so it exists in exactly one place. The previous version also declared a 540pt-tall frame
+/// inside a 440pt window, which centred the overflow and clipped both the title and the
+/// author's email link.
 struct AboutView: View {
-    @EnvironmentObject var appState: AppState
+    private var versionString: String {
+        let info = Bundle.main.infoDictionary
+        let short = info?["CFBundleShortVersionString"] as? String ?? "—"
+        if let build = info?["CFBundleVersion"] as? String, build != short {
+            return "Version \(short) (\(build))"
+        }
+        return "Version \(short)"
+    }
 
     var body: some View {
-        VStack(spacing: 16) {
-            // App Icon and Title
-            HStack(spacing: 16) {
-                if let appIcon = NSImage(named: "AppIcon") {
-                    Image(nsImage: appIcon)
-                        .resizable()
-                        .frame(width: 80, height: 80)
-                        .cornerRadius(12)
-                } else {
-                    Image(systemName: "clipboard")
-                        .resizable()
-                        .frame(width: 60, height: 60)
-                        .foregroundColor(.accentColor)
-                }
+        VStack(spacing: 0) {
+            VStack(spacing: 10) {
+                appIcon
+                    .frame(width: 72, height: 72)
 
-                VStack(alignment: .leading, spacing: 4) {
+                VStack(spacing: 3) {
                     Text("Clipboard Manager")
                         .font(.title2)
                         .fontWeight(.semibold)
 
-                    Text("Version 2.0")
+                    Text(versionString)
                         .font(.subheadline)
-                        .foregroundColor(.secondary)
-
-                    Text("Built with SwiftUI")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
+                        .foregroundStyle(.secondary)
                 }
 
-                Spacer()
+                Text("A secure, native macOS clipboard history manager.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
             }
-            .padding()
-            .background(Color(nsColor: .controlBackgroundColor))
-            .cornerRadius(8)
+            .padding(.top, 28)
+            .padding(.horizontal, 32)
 
-            // Description
-            Text("A secure, native macOS clipboard history manager")
-                .font(.subheadline)
-                .multilineTextAlignment(.center)
-                .foregroundColor(.secondary)
-                .padding(.horizontal)
+            Spacer(minLength: 24)
 
-            // Features Grid
-            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
-                FeatureCard(icon: "lock.shield.fill", text: "AES-256 Encryption", color: .green)
-                FeatureCard(icon: "menubar.rectangle", text: "Menu Bar App", color: .blue)
-                FeatureCard(icon: "magnifyingglass", text: "Fast Search", color: .purple)
-                FeatureCard(icon: "photo", text: "Image Support", color: .orange)
-            }
-            .padding(.horizontal)
-
-            Divider()
-                .padding(.horizontal)
-
-            // Keyboard Shortcuts
             VStack(spacing: 8) {
-                Text("Keyboard Shortcuts")
-                    .font(.headline)
+                Divider()
 
                 VStack(spacing: 4) {
-                    ShortcutRow(keys: "⌘⇧ Space", description: "Open clipboard history")
-                    ShortcutRow(keys: "⌘ 1-9", description: "Copy recent item from menu")
-                    ShortcutRow(keys: "↑ ↓", description: "Navigate results in search")
-                    ShortcutRow(keys: "↵ Return", description: "Copy selected and close")
-                    ShortcutRow(keys: "Esc", description: "Close search")
+                    Text("Created by Steven Harbron")
+                        .font(.callout)
+
+                    Link("steve.harbron@icloud.com", destination: URL.authorEmail)
+                        .font(.caption)
                 }
-                .padding(.horizontal)
+                .padding(.top, 4)
+
+                Text("Clipboard history is encrypted at rest with AES-256-GCM.")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
             }
-
-            Divider()
-                .padding(.horizontal)
-
-            // Author
-            VStack(spacing: 6) {
-                Text("Created by Steven Harbron")
-                    .font(.subheadline)
-
-                Button("steve.harbron@icloud.com") {
-                    if let url = URL(string: "mailto:steve.harbron@icloud.com") {
-                        NSWorkspace.shared.open(url)
-                    }
-                }
-                .buttonStyle(.link)
-                .font(.caption)
-            }
-
-            Spacer()
+            .padding(.horizontal, 32)
+            .padding(.bottom, 24)
         }
-        .padding()
-        .frame(width: 420, height: 540)
+        .frame(width: 360, height: 340)
+    }
+
+    @ViewBuilder
+    private var appIcon: some View {
+        if let icon = NSImage(named: "AppIcon") {
+            Image(nsImage: icon)
+                .resizable()
+                .aspectRatio(contentMode: .fit)
+        } else {
+            Image(systemName: "clipboard")
+                .resizable()
+                .aspectRatio(contentMode: .fit)
+                .foregroundStyle(.tint)
+        }
     }
 }
 
-struct FeatureCard: View {
-    let icon: String
-    let text: String
-    let color: Color
-
-    var body: some View {
-        VStack(spacing: 8) {
-            Image(systemName: icon)
-                .font(.system(size: 24))
-                .foregroundColor(color)
-
-            Text(text)
-                .font(.caption)
-                .multilineTextAlignment(.center)
-                .lineLimit(2)
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 16)
-        .padding(.horizontal, 8)
-        .background(color.opacity(0.1))
-        .cornerRadius(8)
-    }
-}
-
-struct ShortcutRow: View {
-    let keys: String
-    let description: String
-
-    var body: some View {
-        HStack {
-            Text(keys)
-                .font(.system(.body, design: .monospaced))
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
-                .background(Color.secondary.opacity(0.1))
-                .cornerRadius(4)
-
-            Text(description)
-                .font(.caption)
-                .foregroundColor(.secondary)
-
-            Spacer()
-        }
-    }
+private extension URL {
+    /// Safe because the literal is a valid mailto URL; the fallback keeps the view non-failable.
+    static let authorEmail = URL(string: "mailto:steve.harbron@icloud.com") ?? URL(fileURLWithPath: "/")
 }

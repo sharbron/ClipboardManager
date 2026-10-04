@@ -31,27 +31,3 @@ struct PreferencesDocument: FileDocument {
         return FileWrapper(regularFileWithContents: data)
     }
 }
-
-// MARK: - Snippets Preferences Tab
-
-struct SnippetsPreferencesView: View {
-    @EnvironmentObject var appState: AppState
-    @AppStorage(Preferences.snippetsEnabled) private var snippetsEnabled: Bool = true
-
-    var body: some View {
-        VStack(spacing: 0) {
-            HStack {
-                Toggle("Expand snippet triggers on copy", isOn: $snippetsEnabled)
-                Spacer()
-            }
-            .padding(.horizontal, 20)
-            .padding(.vertical, 10)
-
-            Divider()
-
-            SnippetsView(appState: appState)
-                .disabled(!snippetsEnabled)
-                .opacity(snippetsEnabled ? 1 : 0.5)
-        }
-    }
-}

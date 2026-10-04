@@ -39,7 +39,7 @@ enum Preferences {
         maxImageSize: 2048.0,
         ocrEnabled: true,
         snippetsEnabled: true,
-        previewLength: 150.0,
+        previewLength: 60.0,
         showTypeIcons: true,
         compactMode: false
     ]
@@ -53,17 +53,45 @@ enum Preferences {
         migrateLegacyKeys()
     }
 
+    /// Internal flags from superseded schemes, left behind in existing installs. Migration
+    /// state now lives in the databases themselves, and the FTS index is gone, so nothing
+    /// reads these any more.
+    private static let obsoleteKeys = [
+        "extractedTextEncrypted", "imageDataEncrypted",
+        "ftsRecoveryCompleted", "ftsPlaintextPurged"
+    ]
+
     private static func migrateLegacyKeys() {
         let store = UserDefaults.standard
-        guard store.object(forKey: legacyMenuBarClipCount) != nil else { return }
 
-        // The legacy key was the one actually driving the menu, so it wins on upgrade.
-        let legacyValue = store.integer(forKey: legacyMenuBarClipCount)
-        if legacyValue > 0 {
-            store.set(Double(legacyValue), forKey: maxClips)
+        if store.object(forKey: legacyMenuBarClipCount) != nil {
+            // The legacy key was the one actually driving the menu, so it wins on upgrade.
+            let legacyValue = store.integer(forKey: legacyMenuBarClipCount)
+            if legacyValue > 0 {
+                store.set(Double(legacyValue), forKey: maxClips)
+            }
+            store.removeObject(forKey: legacyMenuBarClipCount)
         }
-        store.removeObject(forKey: legacyMenuBarClipCount)
+
+        for key in obsoleteKeys {
+            store.removeObject(forKey: key)
+        }
+
+        // An earlier build let this range up to 300 while nothing consumed the value. Anyone
+        // who dragged that slider has a stored length that would stretch the menu bar dropdown
+        // across the screen, so bring it back into the supported range.
+        if store.object(forKey: previewLength) != nil {
+            let stored = store.double(forKey: previewLength)
+            let clamped = min(max(stored, previewLengthRange.lowerBound), previewLengthRange.upperBound)
+            if clamped != stored {
+                store.set(clamped, forKey: previewLength)
+            }
+        }
     }
+
+    /// Supported preview lengths. The upper bound is deliberately modest: a native menu sizes
+    /// itself to its widest item.
+    static let previewLengthRange: ClosedRange<Double> = 30...120
 
     /// Validates a value read from a settings file against the type this key expects,
     /// returning it normalised or nil if it doesn't belong. JSON gives back `NSNumber` for
@@ -105,9 +133,13 @@ enum Preferences {
         return (value > 0 ? value : 2048) * 1024
     }
 
+    /// Upper bound is deliberately modest: this drives the menu bar dropdown, and a native
+    /// menu sizes itself to its longest item, so a long preview stretches the menu across
+    /// the screen.
     static var previewCharacterLimit: Int {
-        let value = UserDefaults.standard.integer(forKey: previewLength)
-        return value > 0 ? value : 150
+        let value = UserDefaults.standard.double(forKey: previewLength)
+        guard value > 0 else { return 60 }
+        return Int(min(max(value, previewLengthRange.lowerBound), previewLengthRange.upperBound))
     }
 
     static var isOCREnabled: Bool { UserDefaults.standard.bool(forKey: ocrEnabled) }

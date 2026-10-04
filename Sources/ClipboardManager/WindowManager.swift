@@ -45,8 +45,8 @@ class WindowManager {
                 .environmentObject(appState)
 
             let window = NSWindow(
-                contentRect: NSRect(x: 0, y: 0, width: 520, height: 400),
-                styleMask: [.titled, .closable],
+                contentRect: NSRect(x: 0, y: 0, width: 620, height: 560),
+                styleMask: [.titled, .closable, .resizable],
                 backing: .buffered,
                 defer: false
             )
@@ -70,7 +70,7 @@ class WindowManager {
                 .environmentObject(appState)
 
             let window = NSWindow(
-                contentRect: NSRect(x: 0, y: 0, width: 420, height: 440),
+                contentRect: NSRect(x: 0, y: 0, width: 360, height: 340),
                 styleMask: [.titled, .closable],
                 backing: .buffered,
                 defer: false

@@ -42,6 +42,58 @@ final class PreferencesTests: XCTestCase {
         XCTAssertEqual(Preferences.menuBarClipCount, 15, "Should fall back to the documented default")
     }
 
+    // MARK: - Preview length
+
+    func testStoredPreviewLengthIsClampedIntoRange() {
+        touchedKeys.append(Preferences.previewLength)
+        // A value only reachable from an earlier build, whose slider went to 300 while
+        // nothing read the result. Left alone it stretches the menu across the screen.
+        UserDefaults.standard.set(300.0, forKey: Preferences.previewLength)
+
+        Preferences.register()
+
+        XCTAssertEqual(
+            UserDefaults.standard.double(forKey: Preferences.previewLength),
+            Preferences.previewLengthRange.upperBound,
+            "An out-of-range stored length should be clamped on launch"
+        )
+        XCTAssertLessThanOrEqual(Preferences.previewCharacterLimit, 120)
+    }
+
+    func testPreviewLengthReadIsClampedEvenIfStorageIsOutOfRange() {
+        touchedKeys.append(Preferences.previewLength)
+        UserDefaults.standard.set(5000.0, forKey: Preferences.previewLength)
+
+        XCTAssertEqual(Preferences.previewCharacterLimit, 120, "Reads clamp regardless of storage")
+    }
+
+    func testPreviewLengthDefaultsIntoRangeWhenUnset() {
+        touchedKeys.append(Preferences.previewLength)
+        UserDefaults.standard.removeObject(forKey: Preferences.previewLength)
+
+        XCTAssertTrue(Preferences.previewLengthRange.contains(Double(Preferences.previewCharacterLimit)))
+    }
+
+    // MARK: - Obsolete key cleanup
+
+    func testRegisterRemovesObsoleteInternalFlags() {
+        let stale = ["extractedTextEncrypted", "imageDataEncrypted",
+                     "ftsRecoveryCompleted", "ftsPlaintextPurged"]
+        for key in stale {
+            touchedKeys.append(key)
+            UserDefaults.standard.set(true, forKey: key)
+        }
+
+        Preferences.register()
+
+        for key in stale {
+            XCTAssertNil(
+                UserDefaults.standard.object(forKey: key),
+                "\(key) is no longer read by anything and should be cleaned up"
+            )
+        }
+    }
+
     // MARK: - Import validation
 
     func testCoerceImportedAcceptsMatchingTypes() throws {

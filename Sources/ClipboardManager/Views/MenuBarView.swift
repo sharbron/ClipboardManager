@@ -113,7 +113,10 @@ struct ClipMenuItemView: View {
     @EnvironmentObject var appState: AppState
     @AppStorage(Preferences.showTypeIcons) private var showTypeIcons: Bool = true
     @AppStorage(Preferences.compactMode) private var compactMode: Bool = false
-    @AppStorage(Preferences.previewLength) private var previewLength: Double = 150
+    @AppStorage(Preferences.previewLength) private var previewLength: Double = 60
+
+    /// Widest a menu row may render. Roughly the width of a comfortable menu on any display.
+    private static let maximumRowWidth: CGFloat = 380
 
     var body: some View {
         menuItem
@@ -155,8 +158,9 @@ struct ClipMenuItemView: View {
                 // Preview text
                 Text(previewText)
                     .lineLimit(1)
+                    .truncationMode(.tail)
 
-                Spacer()
+                Spacer(minLength: 0)
 
                 // Pin indicator
                 if clip.isPinned {
@@ -165,6 +169,10 @@ struct ClipMenuItemView: View {
                         .font(.system(size: 10))
                 }
             }
+            // A native menu sizes itself to its widest item, so an unconstrained row lets one
+            // long clip stretch the whole menu across the screen. The preview is already
+            // length-capped; this bounds the rendered width regardless.
+            .frame(maxWidth: Self.maximumRowWidth, alignment: .leading)
         } primaryAction: {
             Task {
                 await appState.copyToClipboard(clip: clip)
