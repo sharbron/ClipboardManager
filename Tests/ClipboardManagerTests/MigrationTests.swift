@@ -182,6 +182,20 @@ final class MigrationTests: XCTestCase {
         XCTAssertEqual(snippets.first?.content, "Best regards", "Repeated migrations must not corrupt snippets")
     }
 
+    func testSnippetImportRejectsEmptyTriggers() async throws {
+        let database = SnippetDatabase(databasePath: snippetPath)
+
+        let imported = await database.importSnippets([
+            ExportableSnippet(trigger: "", content: "bad", description: "Empty"),
+            ExportableSnippet(trigger: "   ", content: "bad", description: "Whitespace"),
+            ExportableSnippet(trigger: "  ;valid  ", content: "good", description: "Valid")
+        ])
+
+        let snippets = await database.getAllSnippets()
+        XCTAssertEqual(imported, 1)
+        XCTAssertEqual(snippets.map(\.trigger), [";valid"])
+    }
+
     func testPrepareEncryptsLegacyPlaintextSnippets() async throws {
         let plaintext = "+1 (555) 123-4567"
         do {

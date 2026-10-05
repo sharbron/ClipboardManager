@@ -24,8 +24,7 @@ struct SnippetsView: View {
             // Header
             HStack {
                 Text("Snippets")
-                    .font(.title)
-                    .fontWeight(.bold)
+                    .font(.headline)
 
                 Spacer()
 
@@ -37,8 +36,7 @@ struct SnippetsView: View {
 
                 // Add button
                 Button(action: { showingAddSheet = true }) {
-                    Image(systemName: "plus.circle.fill")
-                        .font(.title2)
+                    Image(systemName: "plus")
                 }
                 .help("Add Snippet")
             }
@@ -113,14 +111,14 @@ struct SnippetsView: View {
 
                 Spacer()
 
-                Text("Tip: Type a trigger (e.g., ';email') to expand")
+                Text("Copy a trigger (e.g., ;email) to expand it.")
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
             .padding(8)
             .background(Color(nsColor: .controlBackgroundColor))
         }
-        .frame(width: 700, height: 500)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .sheet(isPresented: $showingAddSheet) {
             AddSnippetView(appState: appState, isPresented: $showingAddSheet)
         }
@@ -277,14 +275,16 @@ struct AddSnippetView: View {
 
     @MainActor
     private func saveSnippet() {
+        let normalizedTrigger = trigger.trimmingCharacters(in: .whitespacesAndNewlines)
+
         // Validate trigger
-        guard !trigger.isEmpty, !description.isEmpty, !content.isEmpty else {
+        guard !normalizedTrigger.isEmpty, !description.isEmpty, !content.isEmpty else {
             errorMessage = "All fields are required"
             showingError = true
             return
         }
 
-        appState.saveSnippet(trigger: trigger, content: content, description: description)
+        appState.saveSnippet(trigger: normalizedTrigger, content: content, description: description)
         isPresented = false
     }
 }

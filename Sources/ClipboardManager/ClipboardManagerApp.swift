@@ -16,11 +16,18 @@ struct ClipboardManagerApp: App {
         let database = ClipboardDatabase()
         let snippetDatabase = SnippetDatabase()
         let snippetManager = SnippetManager(database: snippetDatabase)
-        _appState = StateObject(wrappedValue: AppState(
+        let appState = AppState(
             database: database,
             snippetDatabase: snippetDatabase,
             snippetManager: snippetManager
-        ))
+        )
+        _appState = StateObject(wrappedValue: appState)
+
+        // Hand the state to the app delegate so it can start monitoring as soon as the app
+        // finishes launching. This used to hang off a SwiftUI `onChange` on the scene, which
+        // only fired if the scene happened to be re-evaluated after launch - when it wasn't,
+        // the app sat in the menu bar capturing nothing.
+        AppDelegate.launchAppState = appState
     }
 
     var body: some Scene {
@@ -32,11 +39,6 @@ struct ClipboardManagerApp: App {
             Image(systemName: "clipboard")
         }
         .menuBarExtraStyle(.menu)
-        .onChange(of: appDelegate.isReady) { isReady in
-            if isReady {
-                appDelegate.initialize(with: appState)
-            }
-        }
     }
 }
 
@@ -48,7 +50,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var localMonitor: Any?
     private var cleanupTask: Task<Void, Never>?
     private var logoutObserver: NSObjectProtocol?
-    @Published var isReady = false
+    private var logoutCleanupTask: Task<Void, Never>?
+    private var isLoggingOut = false
+    private var isWaitingToTerminate = false
+
+    /// Set by `ClipboardManagerApp.init`, which runs before the app finishes launching.
+    static var launchAppState: AppState?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         logger.debug("ClipboardManager launched")
@@ -56,8 +63,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Request notification permissions
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
 
-        // Signal that we're ready to initialize
-        isReady = true
+        guard let appState = Self.launchAppState else {
+            logger.error("No app state available at launch - clipboard monitoring not started")
+            return
+        }
+        initialize(with: appState)
     }
 
     func initialize(with appState: AppState) {
@@ -140,12 +150,33 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             object: nil,
             queue: .main
         ) { _ in
-            guard Preferences.clearsHistoryOnLogout else { return }
-            Task { @MainActor in
-                let deleted = await appState.database.clearAllHistory(keepPinned: true)
-                logger.info("Cleared \(deleted) clip(s) on logout")
+            MainActor.assumeIsolated {
+                self.isLoggingOut = true
+                guard Preferences.clearsHistoryOnLogout, self.logoutCleanupTask == nil else { return }
+                self.logoutCleanupTask = Task {
+                    let deleted = await appState.database.clearAllHistory(keepPinned: true)
+                    logger.info("Cleared \(deleted) clip(s) on logout")
+                }
             }
         }
+    }
+
+    /// Keep the process alive until the privacy cleanup requested for logout has committed.
+    /// Returning `terminateLater` is AppKit's supported way to finish asynchronous shutdown work.
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard isLoggingOut,
+              Preferences.clearsHistoryOnLogout,
+              let logoutCleanupTask else {
+            return .terminateNow
+        }
+
+        guard !isWaitingToTerminate else { return .terminateLater }
+        isWaitingToTerminate = true
+        Task {
+            await logoutCleanupTask.value
+            sender.reply(toApplicationShouldTerminate: true)
+        }
+        return .terminateLater
     }
 
     /// Runs clip retention cleanup immediately, then once every 24 hours.
@@ -169,7 +200,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
     }
-
     func applicationWillTerminate(_ notification: Notification) {
         clipboardMonitor?.stopMonitoring()
         cleanupTask?.cancel()

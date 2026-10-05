@@ -234,6 +234,24 @@ final class ClipboardDatabaseTests: XCTestCase {
         XCTAssertEqual(remainingClips.first?.content, "Pinned Clip")
     }
 
+    func testRetentionCleanupPreservesPinnedClips() async throws {
+        await database.saveClip("Unpinned Clip")
+        await database.saveClip("Pinned Clip")
+
+        let clips = await database.getRecentClips(limit: 10)
+        let pinnedID = try XCTUnwrap(clips.first(where: { $0.content == "Pinned Clip" })?.id)
+        _ = await database.togglePin(clipId: pinnedID)
+
+        // A future cutoff makes both newly-created rows old enough to clean up without relying
+        // on subsecond timestamp ordering. User-facing preferences never pass a negative value.
+        let deleted = await database.cleanupOldClips(days: -1)
+        let remaining = await database.getRecentClips(limit: 10)
+
+        XCTAssertEqual(deleted, 1)
+        XCTAssertEqual(remaining.map(\.content), ["Pinned Clip"])
+        XCTAssertTrue(remaining[0].isPinned)
+    }
+
     func testClearLast24Hours() async throws {
         // Save a clip
         await database.saveClip("Recent clip")
@@ -309,6 +327,19 @@ final class ClipboardDatabaseTests: XCTestCase {
         // Get new count
         let newCount = await database.getTotalClipsCount()
         XCTAssertEqual(newCount, initialCount + 3, "Count should increase by 3")
+    }
+
+    func testGetStatisticsCountsEveryClipTypeAndPinnedState() async throws {
+        await database.saveClip("Plain text")
+        await database.saveClip("Rich text", type: "rtf", rtfData: Data("rtf".utf8))
+        await database.saveClip("Image", type: "image", image: Data("image".utf8))
+
+        let clips = await database.getRecentClips(limit: 10)
+        let pinnedID = try XCTUnwrap(clips.first(where: { $0.content == "Plain text" })?.id)
+        _ = await database.togglePin(clipId: pinnedID)
+
+        let statistics = await database.getStatistics()
+        XCTAssertEqual(statistics, ClipboardStatistics(total: 3, text: 2, images: 1, pinned: 1))
     }
 
     func testGetDatabaseSize() async throws {
@@ -472,5 +503,32 @@ final class ClipboardDatabaseTests: XCTestCase {
             }
             wait(for: [expectation], timeout: 5.0)
         }
+    }
+
+    // MARK: - Duplicate Detection
+
+    func testIsDuplicate_ComparesAgainstNewestClipOfAnyType() async throws {
+        await database.saveClip("A")
+        await database.saveClip("[Image: 1x1]", type: "image", image: Data([1, 2, 3]))
+
+        let textIsDuplicate = await database.isDuplicate(text: "A", type: "text")
+        XCTAssertFalse(textIsDuplicate, "A is no longer the newest clip, so re-copying it must be saved")
+
+        let imageIsDuplicate = await database.isDuplicate(
+            text: "[Image: 1x1]",
+            type: "image",
+            imageBytes: Data([1, 2, 3])
+        )
+        XCTAssertTrue(imageIsDuplicate)
+    }
+
+    func testIsDuplicate_ClipsSavedWithinSameSecond_UsesLatestInsert() async throws {
+        await database.saveClip("first")
+        await database.saveClip("second")
+
+        let secondIsDuplicate = await database.isDuplicate(text: "second", type: "text")
+        let firstIsDuplicate = await database.isDuplicate(text: "first", type: "text")
+        XCTAssertTrue(secondIsDuplicate)
+        XCTAssertFalse(firstIsDuplicate)
     }
 }

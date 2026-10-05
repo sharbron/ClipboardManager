@@ -1,4 +1,5 @@
 import XCTest
+import AppKit
 @testable import ClipboardManager
 
 /// Tests for AppState class
@@ -302,6 +303,28 @@ final class AppStateTests: XCTestCase {
         let pasteboard = NSPasteboard.general
         let clipboardContent = pasteboard.string(forType: .string)
         XCTAssertEqual(clipboardContent, "Test copy", "Clipboard should contain the clip content")
+    }
+
+    @MainActor
+    func testUnreadableImageDoesNotClearExistingClipboard() async throws {
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString("Keep this value", forType: .string)
+
+        let unreadableImage = ClipboardEntry(
+            id: Int64.max,
+            timestamp: Date(),
+            contentType: "image",
+            content: "[Image: unavailable]",
+            imageData: nil,
+            isPinned: false,
+            sourceApp: nil,
+            extractedText: nil
+        )
+
+        await appState.copyToClipboard(clip: unreadableImage)
+
+        XCTAssertEqual(pasteboard.string(forType: .string), "Keep this value")
     }
 
     @MainActor

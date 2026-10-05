@@ -162,6 +162,12 @@ actor SnippetDatabase {
     // MARK: - CRUD Operations
 
     func saveSnippet(trigger: String, content: String, description: String) async -> Bool {
+        let normalizedTrigger = trigger.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedTrigger.isEmpty else {
+            logger.error("Refusing to save a snippet with an empty trigger")
+            return false
+        }
+
         guard let encryptedContent = cipher?.encrypt(content),
               let encryptedDescription = cipher?.encrypt(description) else {
             logger.error("Failed to encrypt snippet - not saved")
@@ -172,16 +178,16 @@ actor SnippetDatabase {
             let now = isoFormatter.string(from: Date())
 
             // Check if trigger already exists
-            if (try db?.pluck(snippets.filter(self.trigger == trigger))) != nil {
+            if (try db?.pluck(snippets.filter(self.trigger == normalizedTrigger))) != nil {
                 // Update existing snippet
-                try db?.run(snippets.filter(self.trigger == trigger).update(
+                try db?.run(snippets.filter(self.trigger == normalizedTrigger).update(
                     self.content <- encryptedContent,
                     self.description <- encryptedDescription
                 ))
             } else {
                 // Insert new snippet
                 try db?.run(snippets.insert(
-                    self.trigger <- trigger,
+                    self.trigger <- normalizedTrigger,
                     self.content <- encryptedContent,
                     self.description <- encryptedDescription,
                     createdAt <- now,
@@ -274,17 +280,19 @@ actor SnippetDatabase {
 
                 let now = isoFormatter.string(from: Date())
                 for snippet in incoming {
+                    let normalizedTrigger = snippet.trigger.trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard !normalizedTrigger.isEmpty else { continue }
                     guard let encryptedContent = cipher.encrypt(snippet.content),
                           let encryptedDescription = cipher.encrypt(snippet.description) else { continue }
 
-                    if (try db.pluck(snippets.filter(trigger == snippet.trigger))) != nil {
-                        try db.run(snippets.filter(trigger == snippet.trigger).update(
+                    if (try db.pluck(snippets.filter(trigger == normalizedTrigger))) != nil {
+                        try db.run(snippets.filter(trigger == normalizedTrigger).update(
                             content <- encryptedContent,
                             description <- encryptedDescription
                         ))
                     } else {
                         try db.run(snippets.insert(
-                            trigger <- snippet.trigger,
+                            trigger <- normalizedTrigger,
                             content <- encryptedContent,
                             description <- encryptedDescription,
                             createdAt <- now,

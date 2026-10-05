@@ -4,42 +4,57 @@ import os.log
 
 private let logger = Logger(subsystem: "com.clipboardmanager", category: "PreferencesView")
 
-// Every tab uses SwiftUI's grouped Form - the same grouped-row layout System Settings uses.
-// This replaces a hand-rolled `PreferenceSection` card that wrapped each group in a tinted
-// background with its own icon and headline, so a section holding a single checkbox rendered
-// as a large coloured box containing one checkbox. Explanatory captions are kept only where
-// they say something the control's own label doesn't.
-
+/// Compact grouped settings with the same tab spacing and content sizing as Window Switcher.
 struct PreferencesView: View {
-    @EnvironmentObject var appState: AppState
-    @State private var selectedTab = 0
+    @State private var selectedTab: PreferencesTab
+
+    init(selection: PreferencesTab = .general) {
+        _selectedTab = State(initialValue: selection)
+    }
 
     var body: some View {
         TabView(selection: $selectedTab) {
             GeneralPreferencesView()
                 .tabItem { Label("General", systemImage: "gearshape") }
-                .tag(0)
-
+                .tag(PreferencesTab.general)
             HistoryPreferencesView()
-                .environmentObject(appState)
                 .tabItem { Label("History", systemImage: "clock") }
-                .tag(1)
-
+                .tag(PreferencesTab.history)
             AppearancePreferencesView()
                 .tabItem { Label("Appearance", systemImage: "paintbrush") }
-                .tag(2)
-
+                .tag(PreferencesTab.appearance)
             SnippetsPreferencesView()
-                .environmentObject(appState)
                 .tabItem { Label("Snippets", systemImage: "text.badge.plus") }
-                .tag(3)
-
+                .tag(PreferencesTab.snippets)
+            ShortcutsPreferencesView()
+                .tabItem { Label("Shortcuts", systemImage: "command") }
+                .tag(PreferencesTab.shortcuts)
             AdvancedPreferencesView()
-                .environmentObject(appState)
-                .tabItem { Label("Advanced", systemImage: "wand.and.stars") }
-                .tag(4)
+                .tabItem { Label("Advanced", systemImage: "slider.horizontal.3") }
+                .tag(PreferencesTab.advanced)
         }
-        .frame(minWidth: 540, idealWidth: 620, minHeight: 400, idealHeight: 560)
+        .padding(.top, 12)
+        // Constrain the form itself on smaller displays so its contents can scroll.
+        .frame(width: 540, height: min(selectedTab.contentHeight + 12, availableHeight))
+    }
+
+    private var availableHeight: CGFloat {
+        (NSScreen.main?.visibleFrame.height ?? 900) * 0.9
+    }
+}
+
+enum PreferencesTab: CaseIterable {
+    case general, history, appearance, snippets, shortcuts, advanced
+
+    var contentHeight: CGFloat {
+        switch self {
+        case .general: return 340
+        case .history: return 640
+        case .appearance: return 550
+        case .snippets: return 590
+        case .shortcuts: return 550
+        case .advanced: return 740
+        }
     }
 }
 
@@ -52,45 +67,55 @@ struct GeneralPreferencesView: View {
 
     var body: some View {
         Form {
-            Section("Startup") {
+            Section {
                 Toggle("Launch at login", isOn: $launchAtLogin)
                     .onChange(of: launchAtLogin) { newValue in
                         setLaunchAtLogin(newValue)
                     }
+            } footer: {
+                SettingsFooter("Automatically start Clipboard Manager when you log in.")
             }
 
-            Section("Privacy") {
+            Section {
                 Toggle("Clear history on logout", isOn: $autoClearOnLogout)
-                FormCaption("Unpinned clips are wiped when you log out or shut down.")
+            } footer: {
+                SettingsFooter("Unpinned clips are cleared when you log out or shut down.")
             }
 
-            Section("Notifications") {
+            Section {
                 Toggle("Notify when a clip is captured", isOn: $enableNotifications)
-            }
-
-            // The single home for the shortcut reference - it used to be duplicated in the
-            // About window with different styling.
-            Section("Keyboard Shortcuts") {
-                ShortcutRow("Open clipboard history", "⌘⇧Space")
-                ShortcutRow("Copy recent item from menu", "⌘1 – ⌘9")
-                ShortcutRow("Navigate search results", "↑ ↓")
-                ShortcutRow("Copy selected and close", "↵")
-                ShortcutRow("Close search", "esc")
-                FormCaption("The first two work globally, in any application.")
             }
         }
         .formStyle(.grouped)
+        .onAppear(perform: syncLaunchAtLoginToggle)
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            syncLaunchAtLoginToggle()
+        }
     }
 
     private func setLaunchAtLogin(_ enable: Bool) {
         do {
             if enable {
-                try SMAppService.mainApp.register()
+                if SMAppService.mainApp.status != .enabled {
+                    try SMAppService.mainApp.register()
+                }
             } else {
-                try SMAppService.mainApp.unregister()
+                if SMAppService.mainApp.status == .enabled {
+                    try SMAppService.mainApp.unregister()
+                }
             }
         } catch {
             logger.error("Failed to \(enable ? "enable" : "disable") launch at login: \(error.localizedDescription)")
+            DispatchQueue.main.async {
+                syncLaunchAtLoginToggle()
+            }
+        }
+    }
+
+    private func syncLaunchAtLoginToggle() {
+        let registered = SMAppService.mainApp.status == .enabled
+        if launchAtLogin != registered {
+            launchAtLogin = registered
         }
     }
 }
@@ -102,12 +127,12 @@ struct HistoryPreferencesView: View {
     @AppStorage(Preferences.cleanupDays) private var cleanupDays: Double = 30
     @AppStorage(Preferences.maxClips) private var maxClips: Double = 15
     @AppStorage(Preferences.maxClipSize) private var maxClipSize: Double = 100
-    @AppStorage(Preferences.maxImageSize) private var maxImageSize: Double = 2048
+    @AppStorage(Preferences.maxImageSize) private var maxImageSize: Double = 10240
     @AppStorage(Preferences.ocrEnabled) private var ocrEnabled: Bool = true
 
     var body: some View {
         Form {
-            Section("Storage") {
+            Section {
                 ValueSlider(
                     "Keep history for",
                     value: $cleanupDays,
@@ -115,7 +140,10 @@ struct HistoryPreferencesView: View {
                     step: 1,
                     readout: "\(Int(cleanupDays)) days"
                 )
-                FormCaption("Older clips are removed automatically.")
+            } header: {
+                Text("Storage")
+            } footer: {
+                SettingsFooter("Older clips are removed automatically.")
             }
 
             Section("Menu Bar") {
@@ -131,7 +159,7 @@ struct HistoryPreferencesView: View {
                 }
             }
 
-            Section("Size Limits") {
+            Section {
                 ValueSlider(
                     "Maximum text",
                     value: $maxClipSize,
@@ -139,8 +167,13 @@ struct HistoryPreferencesView: View {
                     step: 10,
                     readout: "\(Int(maxClipSize)) KB"
                 )
-                FormCaption("Roughly \(estimatePages(Int(maxClipSize))). Larger text clips are skipped.")
+            } header: {
+                Text("Text Size Limit")
+            } footer: {
+                SettingsFooter("Roughly \(estimatePages(Int(maxClipSize))). Larger text clips are skipped.")
+            }
 
+            Section {
                 ValueSlider(
                     "Maximum image",
                     value: $maxImageSize,
@@ -148,12 +181,18 @@ struct HistoryPreferencesView: View {
                     step: 256,
                     readout: formatImageSize(Int(maxImageSize))
                 )
-                FormCaption("Larger images are skipped.")
+            } header: {
+                Text("Image Size Limit")
+            } footer: {
+                SettingsFooter("Larger images are skipped.")
             }
 
-            Section("Image Recognition") {
+            Section {
                 Toggle("Extract text from images (OCR)", isOn: $ocrEnabled)
-                FormCaption("Makes image contents searchable. May slow capture on older Macs.")
+            } header: {
+                Text("Image Recognition")
+            } footer: {
+                SettingsFooter("Makes image contents searchable. May slow capture on older Macs.")
             }
         }
         .formStyle(.grouped)
@@ -181,12 +220,20 @@ struct AppearancePreferencesView: View {
 
     var body: some View {
         Form {
+            Section {
+                ClipboardAppearancePreview(
+                    previewLength: Int(previewLength),
+                    showTypeIcons: showTypeIcons,
+                    compactMode: compactMode
+                )
+            }
+
             Section("Menu Display") {
                 Toggle("Show content type icons", isOn: $showTypeIcons)
                 Toggle("Compact spacing", isOn: $compactMode)
             }
 
-            Section("Preview") {
+            Section {
                 ValueSlider(
                     "Preview length",
                     value: $previewLength,
@@ -194,7 +241,10 @@ struct AppearancePreferencesView: View {
                     step: 10,
                     readout: "\(Int(previewLength)) chars"
                 )
-                FormCaption("Applies to the menu bar list and to search results.")
+            } header: {
+                Text("Preview")
+            } footer: {
+                SettingsFooter("Applies to the menu bar list and to search results.")
             }
         }
         .formStyle(.grouped)
@@ -254,30 +304,39 @@ struct AdvancedPreferencesView: View {
                 }
             }
 
-            Section("Security") {
+            Section {
                 LabeledContent("Encryption", value: "AES-256-GCM")
                 LabeledContent("Key storage", value: "System Keychain")
-                FormCaption("Clip contents, OCR text, images and snippet bodies are all encrypted at rest.")
+            } header: {
+                Text("Security")
+            } footer: {
+                SettingsFooter("Clip contents, OCR text, images and snippet bodies are all encrypted at rest.")
             }
 
-            Section("Settings Backup") {
+            Section {
                 LabeledContent("Preferences file") {
                     HStack {
                         Button("Export…") { showingExportPanel = true }
                         Button("Import…") { showingImportPanel = true }
                     }
                 }
-                FormCaption("Backs up preferences only, not your clipboard history.")
+            } header: {
+                Text("Settings Backup")
+            } footer: {
+                SettingsFooter("Backs up preferences only, not your clipboard history.")
             }
 
-            Section("Clear History") {
+            Section {
                 LabeledContent("Delete clips") {
                     HStack {
                         Button("Last 24 Hours") { showingClear24Confirmation = true }
                         Button("All") { showingClearAllConfirmation = true }
                     }
                 }
-                FormCaption("Pinned clips are always preserved. This cannot be undone.")
+            } header: {
+                Text("Clear History")
+            } footer: {
+                SettingsFooter("Pinned clips are always preserved. This cannot be undone.")
             }
         }
         .formStyle(.grouped)
@@ -327,14 +386,14 @@ struct AdvancedPreferencesView: View {
 
     private func loadStats() {
         Task {
-            let allClips = await appState.database.getRecentClips(limit: 10000)
+            let statistics = await appState.database.getStatistics()
             let size = await appState.database.getDatabaseSize()
 
             await MainActor.run {
-                totalClips = allClips.count
-                textCount = allClips.filter { $0.contentType == "text" || $0.contentType == "rtf" }.count
-                imageCount = allClips.filter { $0.contentType == "image" }.count
-                pinnedCount = allClips.filter { $0.isPinned }.count
+                totalClips = statistics.total
+                textCount = statistics.text
+                imageCount = statistics.images
+                pinnedCount = statistics.pinned
                 databaseSize = size
             }
         }
@@ -418,23 +477,6 @@ struct AdvancedPreferencesView: View {
 
 // MARK: - Shared form components
 
-/// Secondary explanatory text inside a Form section. Used only where it adds something the
-/// control's own label doesn't already say.
-struct FormCaption: View {
-    private let text: String
-
-    init(_ text: String) {
-        self.text = text
-    }
-
-    var body: some View {
-        Text(text)
-            .font(.caption)
-            .foregroundStyle(.secondary)
-            .fixedSize(horizontal: false, vertical: true)
-    }
-}
-
 /// A slider with its current value beside it, laid out as a standard labelled form row.
 struct ValueSlider: View {
     private let label: String
@@ -457,10 +499,31 @@ struct ValueSlider: View {
         self.readout = readout
     }
 
+    private var snappedValue: Binding<Double> {
+        Binding(
+            get: { value },
+            set: { value = Self.snap($0, to: step, in: range) }
+        )
+    }
+
+    /// Rounds to the nearest step counted from the range's lower bound, clamped to the range.
+    /// The upper bound counts as a stop too, since a range needn't end on a whole step
+    /// (100...10240 in steps of 256).
+    static func snap(_ raw: Double, to step: Double, in range: ClosedRange<Double>) -> Double {
+        let clamped = min(max(raw, range.lowerBound), range.upperBound)
+        guard step > 0 else { return clamped }
+        let steps = ((clamped - range.lowerBound) / step).rounded()
+        let snapped = min(range.lowerBound + steps * step, range.upperBound)
+        return range.upperBound - clamped < abs(snapped - clamped) ? range.upperBound : snapped
+    }
+
     var body: some View {
         LabeledContent {
             HStack(spacing: 10) {
-                Slider(value: $value, in: range, step: step) {
+                // Passing `step` to Slider makes macOS draw a tick mark for every step, which
+                // for ranges like 1...365 fills the track with a dense bar. Snap the value
+                // ourselves instead so the slider stays a clean track.
+                Slider(value: snappedValue, in: range) {
                     Text(label)
                 }
                 .labelsHidden()
@@ -477,28 +540,31 @@ struct ValueSlider: View {
     }
 }
 
-/// A read-only shortcut reference row. The key cap uses a semantic fill so it stays legible
-/// in both themes - the previous version hardcoded `Color.black.opacity(0.6)`, which rendered
-/// as a black blob against a dark background.
-struct ShortcutRow: View {
-    private let action: String
-    private let keys: String
+// MARK: - Shortcuts
 
-    init(_ action: String, _ keys: String) {
-        self.action = action
-        self.keys = keys
-    }
-
+struct ShortcutsPreferencesView: View {
     var body: some View {
-        LabeledContent {
-            Text(keys)
-                .font(.callout)
-                .monospaced()
-                .padding(.horizontal, 8)
-                .padding(.vertical, 3)
-                .background(.quaternary, in: RoundedRectangle(cornerRadius: 5))
-        } label: {
-            Text(action)
+        Form {
+            Section {
+                ShortcutFormRows(shortcuts: ClipboardShortcuts.global)
+            } header: {
+                Text("Global")
+            } footer: {
+                SettingsFooter("Works in any app. Requires Accessibility access in System Settings.")
+            }
+
+            Section {
+                ShortcutFormRows(shortcuts: ClipboardShortcuts.menu)
+            } header: {
+                Text("Clipboard Menu")
+            } footer: {
+                SettingsFooter("Available while the clipboard menu is open.")
+            }
+
+            Section("Search") {
+                ShortcutFormRows(shortcuts: ClipboardShortcuts.search)
+            }
         }
+        .formStyle(.grouped)
     }
 }

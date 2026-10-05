@@ -116,4 +116,12 @@ final class PreferencesTests: XCTestCase {
         XCTAssertNil(Preferences.coerceImported(true, forKey: "someInternalFlag"))
         XCTAssertFalse(Preferences.importable.contains("someInternalFlag"))
     }
+
+    func testValueSliderSnap_RoundsToStepFromLowerBoundAndClamps() {
+        XCTAssertEqual(ValueSlider.snap(47.3, to: 1, in: 1...365), 47)
+        XCTAssertEqual(ValueSlider.snap(104, to: 10, in: 10...1000), 100)
+        XCTAssertEqual(ValueSlider.snap(400, to: 256, in: 100...10240), 356)
+        XCTAssertEqual(ValueSlider.snap(10_200, to: 256, in: 100...10240), 10240, "Top of range stays reachable")
+        XCTAssertEqual(ValueSlider.snap(-5, to: 1, in: 1...365), 1)
+    }
 }

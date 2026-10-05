@@ -44,19 +44,7 @@ class WindowManager {
             let contentView = PreferencesView()
                 .environmentObject(appState)
 
-            let window = NSWindow(
-                contentRect: NSRect(x: 0, y: 0, width: 620, height: 560),
-                styleMask: [.titled, .closable, .resizable],
-                backing: .buffered,
-                defer: false
-            )
-            window.title = "Preferences"
-            window.center()
-            window.contentView = NSHostingView(rootView: contentView)
-            window.isReleasedWhenClosed = false
-            window.makeKeyAndOrderFront(nil)
-            NSApp.activate(ignoringOtherApps: true)
-
+            let window = makeSettingsWindow(title: "Clipboard Manager Settings", content: contentView)
             preferencesWindow = window
         }
     }
@@ -69,20 +57,24 @@ class WindowManager {
             let contentView = AboutView()
                 .environmentObject(appState)
 
-            let window = NSWindow(
-                contentRect: NSRect(x: 0, y: 0, width: 360, height: 340),
-                styleMask: [.titled, .closable],
-                backing: .buffered,
-                defer: false
-            )
-            window.title = "About Clipboard Manager"
-            window.center()
-            window.contentView = NSHostingView(rootView: contentView)
-            window.isReleasedWhenClosed = false
-            window.makeKeyAndOrderFront(nil)
-            NSApp.activate(ignoringOtherApps: true)
-
+            let window = makeSettingsWindow(title: "About Clipboard Manager", content: contentView)
             aboutWindow = window
         }
+    }
+
+    /// Let AppKit follow the SwiftUI content size, including changes between settings tabs.
+    private func makeSettingsWindow<Content: View>(title: String, content: Content) -> NSWindow {
+        let controller = NSHostingController(rootView: content)
+        let window = NSWindow(contentViewController: controller)
+        window.styleMask = [.titled, .closable, .miniaturizable]
+        window.title = title
+        window.isReleasedWhenClosed = false
+        if let visible = NSScreen.main?.visibleFrame.size {
+            window.contentMaxSize = NSSize(width: visible.width * 0.9, height: visible.height * 0.9)
+        }
+        window.center()
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+        return window
     }
 }

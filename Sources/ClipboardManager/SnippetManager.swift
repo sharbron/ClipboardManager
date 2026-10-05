@@ -42,7 +42,7 @@ actor SnippetManager {
         // so copying "See you on ;date" doesn't discard "See you on ".
         // Pick the longest matching trigger for determinism when triggers overlap.
         let suffixMatch = cachedSnippets
-            .filter { trigger, _ in trimmedContent.hasSuffix(trigger) }
+            .filter { trigger, _ in !trigger.isEmpty && trimmedContent.hasSuffix(trigger) }
             .max { $0.key.count < $1.key.count }
 
         if let (trigger, snippet) = suffixMatch {

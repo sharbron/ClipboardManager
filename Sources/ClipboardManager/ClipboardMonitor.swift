@@ -2,32 +2,32 @@ import Cocoa
 import UserNotifications
 import os.log
 
-extension NSImage {
-    func pngData() -> Data? {
-        guard let tiffData = self.tiffRepresentation,
-              let bitmapImage = NSBitmapImageRep(data: tiffData) else {
-            return nil
-        }
-        return bitmapImage.representation(using: .png, properties: [:])
-    }
-}
-
 /// Modern async/await clipboard monitor using Swift Concurrency
 actor ClipboardMonitor {
     private static let logger = Logger(subsystem: "com.clipboardmanager", category: "ClipboardMonitor")
+
+    /// Polling only compares a counter, so it is cheap; a short interval keeps copies made in
+    /// quick succession from collapsing into one, and keeps the source app attribution close.
+    private static let pollInterval: UInt64 = 500_000_000
+
     private var monitoringTask: Task<Void, Never>?
     private var lastChangeCount: Int
-    private let pasteboard = NSPasteboard.general
+    private let pasteboard: NSPasteboard
     private let database: ClipboardDatabase
     private weak var appState: AppState?
     private var snippetManager: SnippetManager?
-    private var lastContent: String = ""
-    private var isRestoringClip = false
+    private var isPaused = false
 
-    init(database: ClipboardDatabase, appState: AppState, snippetManager: SnippetManager? = nil) {
+    init(
+        database: ClipboardDatabase,
+        appState: AppState?,
+        snippetManager: SnippetManager? = nil,
+        pasteboard: NSPasteboard = .general
+    ) {
         self.database = database
         self.appState = appState
         self.snippetManager = snippetManager
+        self.pasteboard = pasteboard
         self.lastChangeCount = pasteboard.changeCount
     }
 
@@ -41,14 +41,17 @@ actor ClipboardMonitor {
     /// state change into a detached `Task` and claimed to be synchronous, which let the
     /// pasteboard write land first and get re-captured as a brand new clip.
     func pauseMonitoring() {
-        isRestoringClip = true
+        isPaused = true
     }
 
-    /// Resume monitoring after the clipboard has been restored, resynchronising the change
-    /// count so the app's own write isn't mistaken for user activity.
-    func resumeMonitoring() {
-        isRestoringClip = false
-        lastChangeCount = pasteboard.changeCount
+    /// Resume monitoring after the app's own write.
+    ///
+    /// Pass the pasteboard's `changeCount` read straight after that write. Only that change is
+    /// skipped; anything the user copies after it is still captured, which re-reading the
+    /// counter here (after a delay) would silently swallow.
+    func resumeMonitoring(afterOwnWriteAt changeCount: Int) {
+        isPaused = false
+        lastChangeCount = changeCount
     }
 
     nonisolated func startMonitoring() {
@@ -59,19 +62,14 @@ actor ClipboardMonitor {
         // Cancel any existing monitoring task
         monitoringTask?.cancel()
 
-        // Start new monitoring task using async/await
         monitoringTask = Task { [weak self] in
-            guard let self = self else {
-                ClipboardMonitor.logger.debug("self was deallocated, stopping monitoring task")
-                return
-            }
-
-            // Use AsyncStream for periodic checking
             while !Task.isCancelled {
+                guard let self else {
+                    ClipboardMonitor.logger.debug("self was deallocated, stopping monitoring task")
+                    return
+                }
                 await self.checkClipboard()
-
-                // Wait 1.5 seconds before next check (reduced CPU usage)
-                try? await Task.sleep(nanoseconds: 1_500_000_000)
+                try? await Task.sleep(nanoseconds: ClipboardMonitor.pollInterval)
             }
         }
     }
@@ -87,140 +85,76 @@ actor ClipboardMonitor {
 
     /// Ask the UI to reload after a new clip lands.
     private func notifyClipsChanged() {
-        guard let appState else {
-            ClipboardMonitor.logger.debug("appState was deallocated, clips not reloaded")
-            return
-        }
+        guard let appState else { return }
         Task { @MainActor in appState.loadClips() }
     }
 
-    private func checkClipboard() async {
-        // Skip monitoring if we're restoring a clip
-        guard !isRestoringClip else { return }
+    /// Captures the pasteboard if it changed since the last check. Internal for tests.
+    func checkClipboard() async {
+        guard !isPaused else { return }
 
-        // Check if clipboard has changed
-        guard pasteboard.changeCount != lastChangeCount else { return }
-        lastChangeCount = pasteboard.changeCount
+        let changeCount = pasteboard.changeCount
+        guard changeCount != lastChangeCount else { return }
+        lastChangeCount = changeCount
 
-        let maxClipSizeBytes = Preferences.maxClipSizeBytes
-        let maxImageSizeBytes = Preferences.maxImageSizeBytes
-
-        // Get the name of the app that owns the clipboard
+        // Everything is read from the pasteboard before the first suspension point, so a
+        // write that lands while this capture is saving can't be mixed into it.
+        let decision = ClipboardCapture.decide(for: pasteboard, limits: .current)
         let source = NSWorkspace.shared.frontmostApplication?.localizedName
 
-        // Check for image first
-        if let imageData = pasteboard.data(forType: .tiff),
-           let image = NSImage(data: imageData),
-           let pngData = image.pngData() {
-            // Check size limit (use image-specific limit)
-            if pngData.count > maxImageSizeBytes {
-                // Skip this clip - too large
-                showSizeNotification(type: "Image", actualSize: pngData.count, limit: maxImageSizeBytes)
-                return
+        switch decision {
+        case .ignore:
+            return
+        case let .tooLarge(kind, size, limit):
+            showSizeNotification(type: kind, actualSize: size, limit: limit)
+        case let .image(description, png):
+            await save(description, type: "image", binary: png, sourceApp: source)
+        case let .richText(plainText, rtf):
+            if let expanded = await expandSnippet(in: plainText, capturedAt: changeCount) {
+                await saveText(expanded, sourceApp: source)
+            } else {
+                await save(plainText, type: "rtf", binary: rtf, sourceApp: source)
             }
+        case .text(let text):
+            let expanded = await expandSnippet(in: text, capturedAt: changeCount)
+            await saveText(expanded ?? text, sourceApp: source)
+        }
+    }
 
-            // Save image with a placeholder text
-            let imageDescription = "[Image: \(Int(image.size.width))x\(Int(image.size.height))]"
+    /// Replaces a copied snippet trigger on the pasteboard with its expansion.
+    private func expandSnippet(in text: String, capturedAt changeCount: Int) async -> String? {
+        guard let snippetManager,
+              let expanded = await snippetManager.checkAndExpandSnippet(content: text) else {
+            return nil
+        }
 
-            // Avoid duplicates by checking if the same image data was recently saved
-            let isDuplicate = await database.isDuplicate(
-                text: imageDescription,
-                type: "image",
-                imageBytes: pngData
-            )
-            if !isDuplicate {
-                await database.saveClip(imageDescription, type: "image", image: pngData, sourceApp: source)
-                lastContent = imageDescription
-                notifyClipsChanged()
-            }
+        // The lookup above suspends; if the user or the app wrote to the pasteboard meanwhile,
+        // don't overwrite that newer content with a stale expansion.
+        guard !isPaused, pasteboard.changeCount == changeCount else { return nil }
+
+        pasteboard.clearContents()
+        pasteboard.setString(expanded, forType: .string)
+        lastChangeCount = pasteboard.changeCount
+        return expanded
+    }
+
+    private func saveText(_ text: String, sourceApp: String?) async {
+        let limit = Preferences.maxClipSizeBytes
+        guard text.utf8.count <= limit else {
+            showSizeNotification(type: "Text", actualSize: text.utf8.count, limit: limit)
             return
         }
+        await save(text, type: "text", binary: nil, sourceApp: sourceApp)
+    }
 
-        // Check for RTF first (preserves formatting)
-        if let rtfData = pasteboard.data(forType: .rtf),
-           let attributedString = NSAttributedString(rtf: rtfData, documentAttributes: nil) {
-            let plainText = attributedString.string
+    private func save(_ text: String, type: String, binary: Data?, sourceApp: String?) async {
+        let image = type == "image" ? binary : nil
+        let rtf = type == "rtf" ? binary : nil
+        let isDuplicate = await database.isDuplicate(text: text, type: type, imageBytes: image, rtfBytes: rtf)
+        guard !isDuplicate else { return }
 
-            // Bound both the visible text and the representation stored in the database. RTF
-            // can contain a small amount of text but a very large formatting payload.
-            let textSizeBytes = plainText.utf8.count
-            let rtfSizeBytes = rtfData.count
-            if textSizeBytes > maxClipSizeBytes || rtfSizeBytes > maxClipSizeBytes {
-                // Skip this clip - too large
-                showSizeNotification(
-                    type: "Rich text",
-                    actualSize: max(textSizeBytes, rtfSizeBytes),
-                    limit: maxClipSizeBytes
-                )
-                return
-            }
-
-            if !plainText.isEmpty && plainText != lastContent {
-                // Check for duplicates - for RTF, compare both text and RTF data
-                let isDuplicate: Bool
-                if attributedString.length > 0 && attributedString.containsAttachments == false {
-                    isDuplicate = await database.isDuplicate(
-                        text: plainText,
-                        type: "rtf",
-                        rtfBytes: rtfData
-                    )
-                } else {
-                    isDuplicate = await database.isDuplicate(text: plainText, type: "text")
-                }
-                
-                if !isDuplicate {
-                    // Store RTF data separately if it has formatting
-                    if attributedString.length > 0 && attributedString.containsAttachments == false {
-                        await database.saveClip(plainText, type: "rtf", rtfData: rtfData, sourceApp: source)
-                    } else {
-                        await database.saveClip(plainText, sourceApp: source)
-                    }
-                    lastContent = plainText
-                    notifyClipsChanged()
-                }
-                return
-            }
-        }
-
-        // Get plain text content as fallback
-        guard let originalContent = pasteboard.string(forType: .string),
-              !originalContent.isEmpty,
-              originalContent != lastContent else { return }
-
-        // Check for snippet expansion
-        var contentToSave = originalContent
-        if let snippetManager = snippetManager,
-           let expandedContent = await snippetManager.checkAndExpandSnippet(content: originalContent) {
-            // Snippet matched! Replace clipboard with expanded content
-            isRestoringClip = true  // Pause monitoring during expansion
-
-            pasteboard.clearContents()
-            pasteboard.setString(expandedContent, forType: .string)
-
-            // Use expanded content for saving
-            contentToSave = expandedContent
-
-            // Brief delay before resuming
-            try? await Task.sleep(nanoseconds: 200_000_000)
-            isRestoringClip = false
-            lastChangeCount = pasteboard.changeCount
-        }
-
-        // Check size limit
-        let textSizeBytes = contentToSave.utf8.count
-        if textSizeBytes > maxClipSizeBytes {
-            // Skip this clip - too large
-            showSizeNotification(type: "Text", actualSize: textSizeBytes, limit: maxClipSizeBytes)
-            return
-        }
-
-        // Avoid duplicates by checking if the same content was recently saved
-        let isDuplicate = await database.isDuplicate(text: contentToSave, type: "text")
-        if !isDuplicate {
-            await database.saveClip(contentToSave, sourceApp: source)
-            lastContent = contentToSave
-            notifyClipsChanged()
-        }
+        await database.saveClip(text, type: type, image: image, rtfData: rtf, sourceApp: sourceApp)
+        notifyClipsChanged()
     }
 
     private func showSizeNotification(type: String, actualSize: Int, limit: Int) {

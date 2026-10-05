@@ -36,7 +36,7 @@ enum Preferences {
         cleanupDays: 30.0,
         maxClips: 15.0,
         maxClipSize: 100.0,
-        maxImageSize: 2048.0,
+        maxImageSize: 10240.0,
         ocrEnabled: true,
         snippetsEnabled: true,
         previewLength: 60.0,
@@ -130,7 +130,7 @@ enum Preferences {
 
     static var maxImageSizeBytes: Int {
         let value = UserDefaults.standard.integer(forKey: maxImageSize)
-        return (value > 0 ? value : 2048) * 1024
+        return (value > 0 ? value : 10240) * 1024
     }
 
     /// Upper bound is deliberately modest: this drives the menu bar dropdown, and a native

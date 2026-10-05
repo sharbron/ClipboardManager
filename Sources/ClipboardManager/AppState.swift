@@ -1,8 +1,5 @@
 import SwiftUI
 import UserNotifications
-import os.log
-
-private let logger = Logger(subsystem: "com.clipboardmanager", category: "AppState")
 
 /// Central state management for the app
 @MainActor
@@ -63,35 +60,50 @@ class AppState: ObservableObject {
     }
 
     func copyToClipboard(clip: ClipboardEntry) async {
+        // Resolve lazy payloads before clearing the pasteboard. A corrupt or missing image/RTF
+        // blob must not destroy whatever the user currently has copied.
+        let payload: ClipboardPayload
+        if clip.contentType == "image" {
+            guard let imageData = await database.getImageData(for: clip.id),
+                  let image = NSImage(data: imageData) else {
+                await Self.notify(title: "Copy Failed", body: "The stored image could not be read.")
+                return
+            }
+            payload = .image(image)
+        } else if clip.contentType == "rtf" {
+            guard let rtfData = await database.getImageData(for: clip.id) else {
+                await Self.notify(title: "Copy Failed", body: "The stored rich text could not be read.")
+                return
+            }
+            payload = .richText(data: rtfData, plainText: clip.content)
+        } else {
+            payload = .text(clip.content)
+        }
+
         // Pause monitoring before writing, so our own write isn't captured as a new clip.
         await clipboardMonitor?.pauseMonitoring()
 
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
 
-        if clip.contentType == "image" {
-            if let imageData = await database.getImageData(for: clip.id),
-               let image = NSImage(data: imageData) {
-                pasteboard.writeObjects([image])
-            }
-        } else if clip.contentType == "rtf" {
-            if let rtfData = await database.getImageData(for: clip.id) {
-                pasteboard.setData(rtfData, forType: .rtf)
-                pasteboard.setString(clip.content, forType: .string)
-            }
-        } else {
-            pasteboard.setString(clip.content, forType: .string)
+        let copied: Bool
+        switch payload {
+        case .image(let image):
+            copied = pasteboard.writeObjects([image])
+        case let .richText(data, plainText):
+            copied = pasteboard.setData(data, forType: .rtf)
+                && pasteboard.setString(plainText, forType: .string)
+        case .text(let text):
+            copied = pasteboard.setString(text, forType: .string)
         }
 
-        // Resume monitoring after a brief delay
-        do {
-            try await Task.sleep(nanoseconds: 100_000_000)
-        } catch {
-            logger.debug("Task sleep was cancelled in copyToClipboard")
-        }
-        await clipboardMonitor?.resumeMonitoring()
+        // Skip exactly this write; anything copied after it is still captured.
+        await clipboardMonitor?.resumeMonitoring(afterOwnWriteAt: pasteboard.changeCount)
 
-        await Self.notify(title: "Copied", body: "Clip copied to clipboard")
+        await Self.notify(
+            title: copied ? "Copied" : "Copy Failed",
+            body: copied ? "Clip copied to clipboard" : "The clip could not be written to the clipboard."
+        )
     }
 
     /// Posts a user notification, honouring the preference and staying silent under XCTest.
@@ -145,13 +157,7 @@ class AppState: ObservableObject {
         pasteboard.clearContents()
         pasteboard.setString(snippet.expandedContent, forType: .string)
 
-        // Resume monitoring
-        do {
-            try await Task.sleep(nanoseconds: 100_000_000)
-        } catch {
-            logger.debug("Task sleep was cancelled in expandSnippet")
-        }
-        await clipboardMonitor?.resumeMonitoring()
+        await clipboardMonitor?.resumeMonitoring(afterOwnWriteAt: pasteboard.changeCount)
 
         // Increment usage count
         await snippetDatabase.incrementUsageCount(trigger: snippet.trigger)
@@ -176,4 +182,10 @@ class AppState: ObservableObject {
             loadSnippets()
         }
     }
+}
+
+private enum ClipboardPayload {
+    case image(NSImage)
+    case richText(data: Data, plainText: String)
+    case text(String)
 }

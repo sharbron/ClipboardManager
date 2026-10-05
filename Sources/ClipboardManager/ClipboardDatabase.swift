@@ -47,6 +47,13 @@ struct ClipboardEntry: Hashable {
     }
 }
 
+struct ClipboardStatistics: Equatable {
+    let total: Int
+    let text: Int
+    let images: Int
+    let pinned: Int
+}
+
 /// Thread-safe database actor using Swift Concurrency
 actor ClipboardDatabase {
     /// Bumped whenever the on-disk layout changes. Stored in the database itself via
@@ -385,11 +392,12 @@ actor ClipboardDatabase {
     // This is used to prevent duplicate entries
     func isDuplicate(text: String, type: String, imageBytes: Data? = nil, rtfBytes: Data? = nil) async -> Bool {
         do {
-            // Get the most recent clip of the same type
-            let query = clips.filter(contentType == type)
-                .order(timestamp.desc)
-                .limit(1)
-            guard let row = try db?.pluck(query) else { return false }
+            // Compare against the newest clip of any type. Comparing against the newest clip of
+            // the same type dropped re-copies: text A, then an image, then text A again was
+            // treated as a duplicate of the first A. Timestamps have one-second resolution, so
+            // the id breaks ties between clips saved within the same second.
+            let query = clips.order(timestamp.desc, id.desc).limit(1)
+            guard let row = try db?.pluck(query), row[contentType] == type else { return false }
 
             // Decrypt the stored content
             guard let storedContent = decrypt(row[content]) else { return false }
@@ -489,9 +497,14 @@ actor ClipboardDatabase {
         let cutoffString = isoFormatter.string(from: cutoffDate)
 
         do {
-            let deleted = try db?.run(clips.filter(timestamp < cutoffString).delete()) ?? 0
+            // Pinned clips are explicitly retained by every other history-clearing path and
+            // are described in the UI as always preserved. Retention must follow the same rule.
+            let deleted = try db?.run(
+                clips.filter(timestamp < cutoffString && isPinned == false).delete()
+            ) ?? 0
             return deleted
         } catch {
+            logger.error("Failed to clean up old clips: \(error.localizedDescription)")
             return 0
         }
     }
@@ -534,6 +547,25 @@ actor ClipboardDatabase {
             return try db?.scalar(clips.count) ?? 0
         } catch {
             return 0
+        }
+    }
+
+    func getStatistics() async -> ClipboardStatistics {
+        do {
+            guard let db else {
+                return ClipboardStatistics(total: 0, text: 0, images: 0, pinned: 0)
+            }
+
+            let total = try db.scalar(clips.count)
+            let text = try db.scalar(
+                clips.filter(contentType == "text" || contentType == "rtf").count
+            )
+            let images = try db.scalar(clips.filter(contentType == "image").count)
+            let pinned = try db.scalar(clips.filter(isPinned == true).count)
+            return ClipboardStatistics(total: total, text: text, images: images, pinned: pinned)
+        } catch {
+            logger.error("Failed to retrieve clipboard statistics: \(error.localizedDescription)")
+            return ClipboardStatistics(total: 0, text: 0, images: 0, pinned: 0)
         }
     }
 
